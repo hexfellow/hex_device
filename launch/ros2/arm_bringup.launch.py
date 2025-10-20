@@ -19,7 +19,14 @@ def generate_launch_description():
     read_only = DeclareLaunchArgument(
         'read_only',
         default_value='false',
-        description='Whether to read only the chassis state.'
+        description='Whether to read only the arm state.'
+    )
+
+
+    rate_ros = DeclareLaunchArgument(
+        'rate_ros',
+        default_value='300',
+        description='The rate of the node.'
     )
 
     joint_config = FindPackageShare('hex_device').find(
@@ -82,8 +89,10 @@ def generate_launch_description():
             'arm_series': LaunchConfiguration('arm_series'),
         }],
         remappings=[
-            ('/joint_states', '/joint_states'),
-            ('/joints_cmd', '/joints_cmd'),
+            ('/xtopic_arm/joints_cmd', '/xtopic_arm/joints_cmd'),
+            ('/xtopic_arm/joint_states', '/xtopic_arm/joint_states'),
+            ('/xtopic_arm/gripper_cmd', '/xtopic_arm/gripper_cmd'),
+            ('/xtopic_arm/gripper_states', '/xtopic_arm/gripper_states'),
         ]
     )
 
@@ -92,6 +101,7 @@ def generate_launch_description():
         # arguments
         url,
         read_only,
+        rate_ros,
         joint_config_path,
         init_pose_path,
         gripper_type,

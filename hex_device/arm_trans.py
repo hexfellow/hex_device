@@ -1,77 +1,232 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
 
-from math import pi as PI
-from dataclasses import dataclass
-from typing import List, Dict, Tuple, Optional
 import threading
 import asyncio
 import os
-import time
 import sys
 import numpy as np
+
 script_path = os.path.abspath(os.path.dirname(__file__))
 sys.path.append(script_path)
 
 from ros_interface import DataInterface
-from hex_device_py import Hands, ArmArcher
-from ros_interface import GripperConfig, ArmConfig
+from hex_device_py import Hands, ArmArcher, public_api_up_pb2, public_api_down_pb2, public_api_types_pb2
 from hex_device_py.motor_base import CommandType
+from std_msgs.msg import UInt8MultiArray
+from xpkg_arm_msgs.msg import XmsgArmJointParamList
+from sensor_msgs.msg import JointState
 
-@dataclass
-class JointParam:
-    joint_name: str
-    joint_limit: List[float] # [min_pos, max_pos, min_vel, max_vel, min_acc, max_acc]
+
+# ========== Device Configuration Mapping ==========
+
+class ArmConfig:
+    """Arm configuration: mapping arm type to motor count"""
+    def __init__(self):
+        self.arm_motor_map = {
+            public_api_types_pb2.RobotType.RtArmArcherD6Y: 6,
+            public_api_types_pb2.RobotType.RtArmSaberD6X: 6,
+            public_api_types_pb2.RobotType.RtArmSaberD7X: 7,
+            public_api_types_pb2.RobotType.RtArmSaber750d3Lr3DmDriver: 6,
+            public_api_types_pb2.RobotType.RtArmSaber750d4Lr3DmDriver: 7,
+            public_api_types_pb2.RobotType.RtArmSaber750h3Lr3DmDriver: 6,
+            public_api_types_pb2.RobotType.RtArmSaber750h4Lr3DmDriver: 7,
+        }
+
+
+class GripperConfig:
+    """Gripper configuration: mapping gripper type to motor count"""
+    def __init__(self):
+        self.gripper_motor_map = {
+            public_api_types_pb2.HandType.HtInvalid: 0,
+            public_api_types_pb2.HandType.HtGp100: 1,
+        }
 
 class HexArmApi:
+    """
+    Hex Arm API
+    """
+
     def __init__(self):
-        self.data_interface = DataInterface(name="xnode_arm")
+        # 1. Create pure ROS interface
+        self.ros_interface = DataInterface(name="xnode_arm")
 
-        # init arm
-        arm_config = ArmConfig()
-        if ArmArcher._supports_robot_type(self.data_interface.arm_series):
-            self.data_interface.arm = ArmArcher(
-                self.data_interface.arm_series,
-                arm_config.arm_motor_map[self.data_interface.arm_series],
-                control_hz = self.data_interface.ros_rate,
-                send_message_callback = self.data_interface._pub_ws_down,
-                )
-            self.data_interface.arm._set_robot_type(self.data_interface.arm_series)
-        else:
-            self.data_interface.loge(f"Arm series {self.data_interface.arm_series} is not supported, initializing failed.")
+        # 2. Get parameters
+        arm_series = self.ros_interface.get_parameter('~arm_series', 0)
+        gripper_type = self.ros_interface.get_parameter('~gripper_type', 0)
+        control_hz = self.ros_interface.get_parameter('~rate_ros', 300.0)
+        joint_config_path = self.ros_interface.get_parameter('~joint_config_path', None)
+        init_pose_path = self.ros_interface.get_parameter('~init_pose_path', None)
 
-        ## reload joints config
-        if self.data_interface.joint_config_path is None:
-            self.data_interface.logi("Joint config path is not set, using default config.")
-        else:
-            self.joints = self.data_interface.get_config_from_json(self.data_interface.joint_config_path)
+        # 3. Create shared topics (ws_down, ws_up)
+        self.ws_down_pub = self.ros_interface.create_publisher('ws_down', UInt8MultiArray, 10)
+        self.ws_up_sub = self.ros_interface.create_subscription(
+            'ws_up', UInt8MultiArray, self._ws_up_callback, 10)
 
-        ## get init pose and step limits
-        if self.data_interface.init_pose_path is not None:
-            init_config = self.data_interface.get_init_pose_config(self.data_interface.init_pose_path)
-            if init_config is not None:
-                self.init_pose = init_config.get('init_pose', None)
-                self.step_limits = init_config.get('step_limits', None)
-                self.data_interface.logi(f"Init pose: {self.init_pose}")
-                if self.step_limits is not None:
-                    self.data_interface.logi(f"Step limits: {self.step_limits}")
+        # 4. Create Arm device
+        self.arm = None
+        self.joint_cmd_sub = None
+        self.joint_states_pub = None
+        self._is_init = False
+
+        if arm_series != 0:
+            # Convert arm_series (int) to robot_type (RobotType enum)
+            if arm_series in ArmArcher.ARM_SERIES_TO_ROBOT_TYPE:
+                robot_type = ArmArcher.ARM_SERIES_TO_ROBOT_TYPE[arm_series]
+
+                # Check if this robot type is supported
+                if ArmArcher._supports_robot_type(robot_type):
+                    arm_config = ArmConfig()
+                    self.arm = ArmArcher(
+                        robot_type=robot_type,
+                        motor_count=arm_config.arm_motor_map[robot_type],
+                        control_hz=control_hz,
+                        send_message_callback=self._pub_ws_down
+                    )
+                    self.arm._set_robot_type(robot_type)
+
+                    # Load configuration using device methods
+                    # arm joint config is solid for now, this code is not used
+                    if joint_config_path:
+                        self.joint_config = self.arm.get_config_from_json(
+                            joint_config_path, self.ros_interface)
+
+                    if init_pose_path:
+                        init_config = self.arm.get_init_pose_config(
+                            init_pose_path, self.ros_interface)
+                        if init_config:
+                            self.init_pose = init_config.get('init_pose', None)
+                            self.step_limits = init_config.get('step_limits', None)
+                            self.ros_interface.logi(f"Init pose: {self.init_pose}")
+                            if self.step_limits:
+                                self.ros_interface.logi(f"Step limits: {self.step_limits}")
+                        else:
+                            self.init_pose = None
+                            self.step_limits = None
+                    else:
+                        self.init_pose = None
+                        self.step_limits = None
+
+                    # Create Arm-specific topics
+                    self.joint_cmd_sub = self.ros_interface.create_subscription(
+                        '/xtopic_arm/joints_cmd',
+                        XmsgArmJointParamList,
+                        self._joint_cmd_callback,
+                        10
+                    )
+                    self.joint_states_pub = self.ros_interface.create_publisher(
+                        '/xtopic_arm/joint_states',
+                        JointState,
+                        10
+                    )
+
+                    self._is_init = True
+                else:
+                    self.ros_interface.loge(f"Arm robot type {robot_type} is not supported")
             else:
-                self.init_pose = False
-                self.step_limits = None
+                self.ros_interface.loge(f"Unknown arm series {arm_series}")
         else:
-            self.init_pose = False
-            self.step_limits = None
+            self.ros_interface.logw("Arm series not specified, skipping arm initialization")
 
-        # init hands (only if gripper_type is valid, not 0/HtInvalid)
-        if self.data_interface.gripper_type is not None and self.data_interface.gripper_type != 0:
-            gripper_config = GripperConfig()
-            self.data_interface.hands = Hands(
-                self.data_interface.gripper_type, 
-                gripper_config.gripper_motor_map[self.data_interface.gripper_type], 
-                control_hz = self.data_interface.ros_rate,
-                send_message_callback = self.data_interface._pub_ws_down,
-                )
-        
+        # 5. Create Hands device
+        self.hands = None
+        self.gripper_cmd_sub = None
+        self.gripper_states_pub = None
+
+        if gripper_type != 0:
+            # Convert gripper_type (int) to hand_type (HandType enum)
+            if gripper_type in Hands.ARM_SERIES_TO_HAND_TYPE:
+                hand_type = Hands.ARM_SERIES_TO_HAND_TYPE[gripper_type]
+
+                # Check if this hand type is supported
+                if Hands._supports_hand_type(hand_type):
+                    gripper_config = GripperConfig()
+                    self.hands = Hands(
+                        hand_type=hand_type,
+                        motor_count=gripper_config.gripper_motor_map[hand_type],
+                        control_hz=control_hz,
+                        send_message_callback=self._pub_ws_down
+                    )
+
+                    # Create Hands-specific topics
+                    self.gripper_cmd_sub = self.ros_interface.create_subscription(
+                        '/xtopic_arm/gripper_cmd',
+                        XmsgArmJointParamList,
+                        self._gripper_cmd_callback,
+                        10
+                    )
+                    self.gripper_states_pub = self.ros_interface.create_publisher(
+                        '/xtopic_arm/gripper_states',
+                        JointState,
+                        10
+                    )
+                else:
+                    self.ros_interface.loge(f"Hand type {hand_type} is not supported")
+            else:
+                self.ros_interface.loge(f"Unknown gripper type {gripper_type}")
+        else:
+            self.ros_interface.logi("Gripper type not specified, skipping hands initialization")
+
+    async def _pub_ws_down(self, data):
+        """Unified ws_down publishing function, shared by all devices"""
+        try:
+            msg = UInt8MultiArray()
+            msg.data = data.SerializeToString()
+            self.ros_interface.publish(self.ws_down_pub, msg)
+        except Exception:
+            pass
+
+    def _ws_up_callback(self, msg):
+        """ws_up callback: parse and distribute to corresponding devices"""
+        api_up = public_api_up_pb2.APIUp()
+        api_up.ParseFromString(bytes(msg.data))
+        robot_type = api_up.robot_type
+
+        # Distribute to arm
+        if self.arm is not None and robot_type == self.arm.robot_type:
+            self.arm._update(api_up)
+
+        # Distribute to hands
+        if self.hands is not None:
+            if hasattr(api_up, 'hand_status') and api_up.HasField('hand_status'):
+                self.hands._update_optional_data('hand_status', api_up.hand_status)
+
+    # ========== Arm-specific topic callbacks ==========
+
+    def _joint_cmd_callback(self, msg):
+        """Process arm's joint commands"""
+        if self.arm is not None and not self._is_init:
+            self.arm.process_motor_command(msg, 'arm', self.ros_interface)
+
+    def _publish_joint_states(self):
+        """Publish arm's joint states"""
+        if self.arm is not None and self.arm._has_new_data:
+            motor_status = self.arm.get_simple_motor_status()
+            msg = JointState()
+            msg.name = [f"joint{i}" for i in range(len(motor_status['pos']))]
+            msg.position = motor_status['pos']
+            msg.velocity = motor_status['vel']
+            msg.effort = motor_status['eff']
+            self.ros_interface.publish(self.joint_states_pub, msg)
+
+    # ========== Hands-specific topic callbacks ==========
+
+    def _gripper_cmd_callback(self, msg):
+        """Process gripper commands"""
+        if self.hands is not None:
+            self.hands.process_motor_command(msg, 'gripper', self.ros_interface)
+
+    def _publish_gripper_states(self):
+        """Publish gripper states"""
+        if self.hands is not None and self.hands._has_new_data:
+            motor_status = self.hands.get_simple_motor_status()
+            msg = JointState()
+            msg.name = [f"gripper{i}" for i in range(len(motor_status['pos']))]
+            msg.position = motor_status['pos']
+            msg.velocity = motor_status['vel']
+            msg.effort = motor_status['eff']
+            self.ros_interface.publish(self.gripper_states_pub, msg)
+
 async def _run_with_cancellation(coro, stop_event, loop):
     """Wrapper to run coroutine and check for stop event"""
     task = asyncio.create_task(coro)
@@ -88,6 +243,7 @@ async def _run_with_cancellation(coro, stop_event, loop):
         pass
     except Exception as e:
         print(f"Task exception: {e}")
+
 
 def run_async_in_thread(coro, stop_event):
     """Helper function to run async coroutine in a thread with a new event loop"""
@@ -111,88 +267,94 @@ def run_async_in_thread(coro, stop_event):
         finally:
             loop.close()
 
+
+# ========== Main Function ==========
+
 def main():
+    """
+    Main function
+    Manages arm and gripper devices using new architecture
+    """
     api = HexArmApi()
-    
+
     # Create stop event for graceful shutdown
     stop_event = threading.Event()
-    
-    # thread spawn
-    ## arm thread
-    arm_thread = None
-    if api.data_interface.arm is not None:
-        arm_thread = threading.Thread(target=run_async_in_thread, args=(api.data_interface.arm._periodic(), stop_event))
-        arm_thread.daemon = True  # Set as daemon so it doesn't block program exit
+
+    # Start device periodic tasks in separate threads
+    device_threads = []
+
+    # Start arm thread if arm exists
+    if api.arm is not None:
+        arm_thread = threading.Thread(
+            target=run_async_in_thread,
+            args=(api.arm._periodic(), stop_event)
+        )
+        arm_thread.daemon = True
         arm_thread.start()
+        device_threads.append(("arm", arm_thread))
     else:
-        api.data_interface.loge("Arm not initialized, skipping arm thread.")
+        api.ros_interface.loge("Arm not initialized, skipping arm thread.")
         return
 
-    ## hands thread
-    hands_thread = None
-    if api.data_interface.hands is not None:
-        hands_thread = threading.Thread(target=run_async_in_thread, args=(api.data_interface.hands._periodic(), stop_event))
-        hands_thread.daemon = True  # Set as daemon so it doesn't block program exit
+    # Start hands thread if hands exists
+    if api.hands is not None:
+        hands_thread = threading.Thread(
+            target=run_async_in_thread,
+            args=(api.hands._periodic(), stop_event)
+        )
+        hands_thread.daemon = True
         hands_thread.start()
+        device_threads.append(("hands", hands_thread))
 
     try:
-        while api.data_interface.ok():
-            # init arm
-            if api.data_interface.arm is not None and api.data_interface._is_init is True:
+        while api.ros_interface.ok():
+            # Initial pose control
+            if api.arm is not None and api._is_init:
                 if api.init_pose is not None and isinstance(api.init_pose, list):
                     # Get current position
-                    current_pos = np.array(api.data_interface.arm.get_motor_positions())
+                    current_pos = np.array(api.arm.get_motor_positions())
                     target_pos = np.array(api.init_pose)
                     err = target_pos - current_pos
-                    
+
                     # Send command to arm
                     if api.step_limits is not None:
                         step_limits = np.array(api.step_limits)
                         err = np.clip(err, -step_limits, step_limits)
                     next_pos = current_pos + err
-                    api.data_interface.arm.motor_command(CommandType.POSITION, next_pos.tolist())
-                    
+                    api.arm.motor_command(CommandType.POSITION, next_pos.tolist())
+
                     # Check if init pose is reached (within tolerance)
                     if np.allclose(current_pos, target_pos, atol=0.01):
-                        api.data_interface.logi("Init pose reached.")
-                        api.data_interface._is_init = False
+                        api.ros_interface.logi("Init pose reached.")
+                        api._is_init = False
                 else:
-                    api.data_interface.logi("Init pose is not set or is not a list, skipping init.")
-                    api.data_interface._is_init = False
+                    api.ros_interface.logi("Init pose is not set or is not a list, skipping init.")
+                    api._is_init = False
 
-            # publish joint states
-            if api.data_interface.arm is not None and api.data_interface.arm._has_new_data:
-                arm_motor = api.data_interface.arm.get_simple_motor_status()
-                api.data_interface.pub_motor_status(arm_motor['pos'], arm_motor['vel'], arm_motor['eff'])
+            # Publish states
+            api._publish_joint_states()
+            api._publish_gripper_states()
 
-            # publish gripper states
-            if api.data_interface.hands is not None and api.data_interface.hands._has_new_data:
-                gripper_motor = api.data_interface.hands.get_simple_motor_status()
-                api.data_interface.pub_motor_status(gripper_motor['pos'], gripper_motor['vel'], gripper_motor['eff'])
+            # Sleep
+            api.ros_interface.sleep()
 
-            # sleep
-            api.data_interface.sleep()
     except KeyboardInterrupt:
         print("\n[Ctrl-C] Received shutdown signal")
     finally:
-        # Signal threads to stop
+        # Stop threads
         print("[Shutdown] Stopping async threads...")
         stop_event.set()
-        
-        # Wait for threads to finish with timeout
-        if arm_thread and arm_thread.is_alive():
-            arm_thread.join(timeout=2.0)
-            if arm_thread.is_alive():
-                print("[Warning] Arm thread did not stop gracefully")
-        
-        if hands_thread and hands_thread.is_alive():
-            hands_thread.join(timeout=2.0)
-            if hands_thread.is_alive():
-                print("[Warning] Hands thread did not stop gracefully")
-        
+
+        for name, thread in device_threads:
+            if thread.is_alive():
+                thread.join(timeout=2.0)
+                if thread.is_alive():
+                    print(f"[Warning] {name} thread did not stop gracefully")
+
         print("[Shutdown] Shutting down ROS interface...")
-        api.data_interface.shutdown()
+        api.ros_interface.shutdown()
         print("[Shutdown] Complete")
+
 
 if __name__ == '__main__':
     main()

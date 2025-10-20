@@ -809,3 +809,155 @@ class MotorBase(ABC):
     def __getitem__(self, motor_index: int) -> Dict[str, Any]:
         """Get motor status by index"""
         return self.get_motor_status(motor_index)
+
+    def parse_extra_param(self, extra_param_str: str) -> Dict:
+        """
+        Parse extra_param string (JSON format)
+
+        Args:
+            extra_param_str: Extra parameter string in JSON format
+
+        Returns:
+            Parsed dictionary, returns empty dict if parsing fails
+        """
+        try:
+            if extra_param_str == "":
+                return {}
+            import json
+            extra_param_dict = json.loads(extra_param_str)
+            return extra_param_dict
+        except Exception:
+            # Silently handle parse errors when no logger available
+            return {}
+
+    def process_motor_command(self, msg, device_name: str = "device", logger=None):
+        """
+        Generic motor command processing function
+        Suitable for both arm and gripper
+
+        Args:
+            msg: Joint command message (XmsgArmJointParamList)
+            device_name: Device name for logging ('arm' or 'gripper')
+            logger: Logger object (optional)
+        """
+        motor_count = len(self)
+
+        if not hasattr(msg, 'joints') or msg.joints is None:
+            if logger:
+                logger.logw(f"XmsgArmJointParamList message has no joints for {device_name}.")
+            return
+
+        length = len(msg.joints)
+        if length != motor_count:
+            if logger:
+                logger.logw(f"XmsgArmJointParamList message length {length} not match {device_name} motor count {motor_count}.")
+            return
+
+        # Priority check: brake in extra_param
+        try:
+            extra_params = [
+                self.parse_extra_param(joint.extra_param)
+                if hasattr(joint, 'extra_param') and joint.extra_param
+                else {}
+                for joint in msg.joints
+            ]
+            brakes = [param.get('brake', False) for param in extra_params]
+
+            if any(brakes):
+                brake_commands = [True] * motor_count
+                self.motor_command(CommandType.BRAKE, brake_commands)
+                if logger:
+                    logger.logi(f"Brake command detected in {device_name} extra_param and sent to all motors")
+                return
+        except Exception as e:
+            if logger:
+                logger.loge(f"Error parsing {device_name} extra_param for brake: {e}")
+            return
+
+        # Check if all joints have the same mode
+        modes = [
+            joint.mode.lower() if hasattr(joint, 'mode') and joint.mode else None
+            for joint in msg.joints
+        ]
+        if None in modes:
+            if logger:
+                logger.logw(f"{device_name.capitalize()} joint command is missing mode field.")
+            return
+
+        # Check if all modes are the same
+        unique_modes = set(modes)
+        if len(unique_modes) > 1:
+            if logger:
+                logger.logw(f"Different control modes detected in {device_name} joints: {list(unique_modes)}. All joints must use the same mode. Discarding command.")
+            return
+        mode = modes[0]
+
+        try:
+            if mode == 'mit_mode':
+                positions = [getattr(joint, 'position', 0.0) for joint in msg.joints]
+                velocities = [getattr(joint, 'velocity', 0.0) for joint in msg.joints]
+                efforts = [getattr(joint, 'effort', 0.0) for joint in msg.joints]
+
+                kps = [param.get('mit_kp', 0.0) for param in extra_params]
+                kds = [param.get('mit_kd', 0.0) for param in extra_params]
+
+                mit_commands = [
+                    MitMotorCommand(position=pos, speed=vel, torque=eff, kp=kp, kd=kd)
+                    for pos, vel, eff, kp, kd in zip(positions, velocities, efforts, kps, kds)
+                ]
+
+                self.motor_command(CommandType.MIT, mit_commands)
+                if logger:
+                    logger.logi(f"{device_name.capitalize()} MIT mode command sent: {len(mit_commands)} joints")
+
+            elif mode == 'position' or mode == 'position_mode':
+                positions = [getattr(joint, 'position', 0.0) for joint in msg.joints]
+                self.motor_command(CommandType.POSITION, positions)
+                if logger:
+                    logger.logi(f"{device_name.capitalize()} position command sent: {positions}")
+
+            elif mode == 'velocity' or mode == 'speed' or mode == 'speed_mode':
+                velocities = [getattr(joint, 'velocity', 0.0) for joint in msg.joints]
+                self.motor_command(CommandType.SPEED, velocities)
+                if logger:
+                    logger.logi(f"{device_name.capitalize()} speed command sent: {velocities}")
+
+            elif mode == 'torque' or mode == 'effort' or mode == 'torque_mode':
+                torques = [getattr(joint, 'effort', 0.0) for joint in msg.joints]
+                self.motor_command(CommandType.TORQUE, torques)
+                if logger:
+                    logger.logi(f"{device_name.capitalize()} torque command sent: {torques}")
+
+            else:
+                if logger:
+                    logger.logw(f"Unknown {device_name} command mode: {mode}")
+                return
+
+        except Exception as e:
+            if logger:
+                logger.loge(f"Error processing {device_name} joint command: {e}")
+
+    def get_config_from_json(self, json_path: str, logger=None) -> Optional[Dict]:
+        """
+        Generic JSON configuration loading function
+
+        Args:
+            json_path: Path to JSON file
+            logger: Logger object (optional)
+
+        Returns:
+            Configuration dictionary, returns None if loading fails
+        """
+        try:
+            import json
+            with open(json_path, 'r') as f:
+                config = json.load(f)
+            return config
+        except FileNotFoundError:
+            if logger:
+                logger.loge(f"Config file not found: {json_path}")
+            return None
+        except Exception as e:
+            if logger:
+                logger.loge(f"Error loading config from {json_path}: {e}")
+            return None

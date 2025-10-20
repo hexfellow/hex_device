@@ -3,116 +3,214 @@
 
 import rospy
 import rospkg
-import json
-from typing import List, Dict, Tuple, Optional
-
+from typing import Callable
 from .interface_base import InterfaceBase
-from std_msgs.msg import UInt8MultiArray, String
-from xpkg_arm_msgs.msg import XmsgArmJointParamList
-from sensor_msgs.msg import JointState
-from hex_device_py import public_api_up_pb2, public_api_down_pb2, public_api_types_pb2
+
 
 class DataInterface(InterfaceBase):
+    """
+    ROS1 interface implementation
+    Only provides ROS1 atomic operations, does not preset any topics or callbacks
+    """
+
     def __init__(self, name: str):
         super(DataInterface, self).__init__(name=name)
 
-        ### ros node
+        # Initialize ROS1 node
         rospy.init_node(self._name, anonymous=True)
-        # init rate
+
+        # Initialize rate control
         self.ros_rate = rospy.get_param('~rate_ros', 300.0)
         self._rate = rospy.Rate(self.ros_rate)
 
-        # load parameters
-        self.joint_config_path = rospy.get_param('~joint_config_path', None)
-        self.init_pose_path = rospy.get_param('~init_pose_path', None)
-        self._is_init = True
-        self.gripper_type = rospy.get_param('~gripper_type', None)
-        self.arm_series = rospy.get_param('~arm_series', None)
+    # ========== Topic management (generic) ==========
 
-        ### publisher
-        self.__ws_down_pub = rospy.Publisher('ws_down', UInt8MultiArray, queue_size=10)
-        self.__motor_status_pub = rospy.Publisher('/xtopic_arm/joint_states', JointState, queue_size=10)
-        self.__json_feedback_pub = rospy.Publisher('/xtopic_arm/json_feedback', String, queue_size=10)
+    def create_publisher(self, topic_name: str, msg_type: type, queue_size: int = 10):
+        """
+        Create publisher
 
-        ### subscriber
-        self.__ws_up_sub = rospy.Subscriber(
-            'ws_up',
-            UInt8MultiArray,
-            self._ws_up_callback,
-        )
-        self.__joints_cmd_sub = rospy.Subscriber(
-            '/xtopic_arm/joints_cmd',
-            XmsgArmJointParamList,
-            self._joints_cmd_callback,
-        )
+        Args:
+            topic_name: Topic name
+            msg_type: Message type
+            queue_size: Queue size
 
-        # gripper subscriber and publisher
-        if self.gripper_type is not None and self.gripper_type != 0:
-            self.__gripper_status_pub = rospy.Publisher('/xtopic_arm/gripper_states', JointState, queue_size=10)
-            self.__gripper_cmd_sub = rospy.Subscriber(
-                '/xtopic_arm/gripper_cmd',
-                XmsgArmJointParamList,
-                self._gripper_cmd_callback,
-            )
+        Returns:
+            Publisher object
+        """
+        try:
+            return rospy.Publisher(topic_name, msg_type, queue_size=queue_size)
+        except Exception as e:
+            self.loge(f"Failed to create publisher for {topic_name}: {e}")
+            return None
 
-    def create_timer(self, interval_sec: float, callback):
-        self.timer = rospy.Timer(rospy.Duration(interval_sec), callback)
-    
-    def cancel_timer(self):
-        if self.timer is not None:
-            self.timer.shutdown()
-            self.timer = None
+    def create_subscription(self, topic_name: str, msg_type: type,
+                           callback: Callable, queue_size: int = 10):
+        """
+        Create subscription
+
+        Args:
+            topic_name: Topic name
+            msg_type: Message type
+            callback: Callback function (defined externally)
+            queue_size: Queue size
+
+        Returns:
+            Subscription object
+        """
+        try:
+            return rospy.Subscriber(topic_name, msg_type, callback, queue_size=queue_size)
+        except Exception as e:
+            self.loge(f"Failed to create subscription for {topic_name}: {e}")
+            return None
+
+    def publish(self, publisher, msg):
+        """
+        Publish message
+
+        Args:
+            publisher: Publisher object (returned by create_publisher)
+            msg: Message object
+        """
+        try:
+            publisher.publish(msg)
+        except Exception:
+            # Silently ignore publish errors during shutdown
+            pass
+
+    # ========== Timer ==========
+
+    def create_timer(self, interval_sec: float, callback: Callable[[], None]):
+        """
+        Create timer
+
+        Args:
+            interval_sec: Timer interval (seconds)
+            callback: Callback function (no parameters, defined externally)
+
+        Returns:
+            Timer object
+
+        Note:
+            ROS1 timer callback requires TimerEvent parameter,
+            but we wrap it here to provide unified interface
+        """
+        try:
+            # Wrap callback to hide event parameter
+            def wrapped_callback(event):
+                callback()
+
+            return rospy.Timer(rospy.Duration(interval_sec), wrapped_callback)
+        except Exception as e:
+            self.loge(f"Failed to create timer: {e}")
+            return None
+
+    # ========== Parameter server ==========
+
+    def get_parameter(self, name: str, default=None):
+        """
+        Get parameter
+
+        Args:
+            name: Parameter name
+            default: Default value
+
+        Returns:
+            Parameter value
+        """
+        try:
+            return rospy.get_param(name, default)
+        except Exception:
+            return default
 
     def set_parameter(self, name: str, value):
-        rospy.set_param(name, value)
+        """
+        Set parameter
 
-    def get_parameter(self, name: str):
-        return rospy.get_param(name)
-    
-    def ok(self):
-        return not rospy.is_shutdown()
+        Args:
+            name: Parameter name
+            value: Parameter value
+        """
+        try:
+            rospy.set_param(name, value)
+        except Exception as e:
+            self.loge(f"Failed to set parameter {name}: {e}")
 
-    def shutdown(self):
-        rospy.signal_shutdown("Normal shutdown")
+    # ========== Rate control ==========
+
+    def set_rate(self, hz: float):
+        """
+        Set rate controller frequency
+
+        Args:
+            hz: Frequency (Hz)
+        """
+        try:
+            self._rate = rospy.Rate(hz)
+        except Exception as e:
+            self.loge(f"Failed to create rate: {e}")
 
     def sleep(self):
+        """Sleep according to rate"""
         try:
             self._rate.sleep()
         except Exception:
             pass
 
-    def logd(self, msg, *args, **kwargs):
+    # ========== Lifecycle ==========
+
+    def ok(self) -> bool:
+        """Check if ROS is running normally"""
+        return not rospy.is_shutdown()
+
+    def shutdown(self):
+        """Shutdown ROS node"""
+        try:
+            rospy.signal_shutdown("Normal shutdown")
+        except Exception:
+            pass
+
+    # ========== Logging ==========
+
+    def logd(self, msg: str, *args, **kwargs):
+        """Output debug log"""
         try:
             rospy.logdebug(msg, *args, **kwargs)
         except Exception:
             pass
 
-    def logi(self, msg, *args, **kwargs):
+    def logi(self, msg: str, *args, **kwargs):
+        """Output info log"""
         try:
             rospy.loginfo(msg, *args, **kwargs)
         except Exception:
             pass
 
-    def logw(self, msg, *args, **kwargs):
+    def logw(self, msg: str, *args, **kwargs):
+        """Output warn log"""
         try:
             rospy.logwarn(msg, *args, **kwargs)
         except Exception:
             pass
 
-    def loge(self, msg, *args, **kwargs):
+    def loge(self, msg: str, *args, **kwargs):
+        """Output error log"""
         try:
             rospy.logerr(msg, *args, **kwargs)
         except Exception:
             pass
 
-    def logf(self, msg, *args, **kwargs):
+    def logf(self, msg: str, *args, **kwargs):
+        """Output fatal log"""
         try:
             rospy.logfatal(msg, *args, **kwargs)
         except Exception:
             pass
 
+    # ========== Tools ==========
+
     def get_pkg_share_path(self, package_name: str) -> str:
-        try:    
+        """Get ROS package shared directory path"""
+        try:
             rospack = rospkg.RosPack()
             return rospack.get_path(package_name)
         except rospkg.ResourceNotFound:
@@ -121,48 +219,3 @@ class DataInterface(InterfaceBase):
         except Exception as e:
             self.loge(f"An error occurred while getting the path for package '{package_name}': {e}")
             return ""
-
-    async def _pub_ws_down(self, data: public_api_down_pb2.APIDown):
-        '''
-        data: Protobuf data of APIDown message
-        '''
-        try:
-            msg = UInt8MultiArray()
-            msg.data = data.SerializeToString()
-            self.__ws_down_pub.publish(msg)
-        except Exception as e:
-            # Silently ignore publish errors during shutdown
-            pass
-
-    def pub_motor_status(self, pos, vel, eff):
-        try:
-            msg = JointState()
-            length = max(len(pos), len(vel), len(eff))
-            msg.name = [f"joint{i}" for i in range(length)]
-            msg.position = pos
-            msg.velocity = vel
-            msg.effort = eff
-            self.__motor_status_pub.publish(msg)
-        except Exception:
-            # Silently ignore publish errors during shutdown
-            pass
-
-    def _ws_up_callback(self, msg: UInt8MultiArray):
-        api_up = public_api_up_pb2.APIUp()
-        api_up.ParseFromString(bytes(msg.data))
-        robot_type = api_up.robot_type
-
-        if self.arm is not None:
-            if robot_type == self.arm.robot_type:
-                self.arm._update(api_up)
-
-        if self.hands is not None:
-            if hasattr(api_up, 'hand_status') and api_up.HasField('hand_status'):
-                self.hands._update_optional_data('hand_status', api_up.hand_status)
-
-    def _joints_cmd_callback(self, msg: XmsgArmJointParamList):
-        if self._is_init is False:
-            self._process_motor_command(msg, self.arm, 'arm')
-
-    def _gripper_cmd_callback(self, msg: XmsgArmJointParamList):
-        self._process_motor_command(msg, self.hands, 'gripper')

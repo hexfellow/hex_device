@@ -546,3 +546,26 @@ class ArmArcher(DeviceBase, MotorBase):
     def clear_motion_history(self):
         """Clear all motion history records (position and velocity)"""
         arm_config_manager.clear_motion_history(self._arm_series)
+
+    def get_init_pose_config(self, json_path: str, logger=None) -> Optional[Dict]:
+        """
+        Get initial pose configuration (Arm-specific)
+
+        Args:
+            json_path: Path to JSON configuration file
+            logger: Logger object (optional)
+
+        Returns:
+            Dictionary containing 'init_pose' and 'step_limits', returns None if loading fails
+        """
+        config = self.get_config_from_json(json_path, logger)
+        if config is None:
+            return None
+
+        result = {}
+        if 'init_pose' in config:
+            result['init_pose'] = config['init_pose']
+        if 'step_limits' in config:
+            result['step_limits'] = config['step_limits']
+
+        return result if result else None
