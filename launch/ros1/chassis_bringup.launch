@@ -1,0 +1,31 @@
+<launch>
+    <!-- arg -->
+    <arg name="url" default="" />
+    <arg name="read_only" default="false" />
+    <arg name="frame_id" default="base_link" />
+    <arg name="simple_mode" default="true" />
+    <arg name="rate_ros" default="100.0" />
+
+    <!-- node -->
+    <node name="xnode_bridge" pkg="xpkg_bridge" type="xnode_bridge" respawn="false" output="screen" required="false">
+        <param name="url" value="$(arg url)"/>
+        <param name="read_only" value="$(arg read_only)"/>
+
+        <remap from="/ws_up" to="/ws_up" />
+        <remap from="/ws_down" to="/ws_down" />
+    </node>
+
+    <node name="hex_chassis" pkg="hex_device" type="chassis_trans.py" output="screen" >
+        <!-- parameter -->
+        <param name="frame_id" value="$(arg frame_id)" />
+        <param name="simple_mode" value="$(arg simple_mode)" />
+        <param name="rate_ros" value="$(arg rate_ros)" />
+        
+        <remap from="/xtopic_chassis/motor_states" to="/xtopic_chassis/motor_states" />
+        <remap from="/xtopic_chassis/odom" to="/xtopic_chassis/odom" />
+
+        <remap from="/xtopic_chassis/joint_cmd" to="/joint_cmd" />
+        <remap from="/xtopic_chassis/cmd_vel" to="/cmd_vel" />
+        <remap from="/xtopic_chassis/clear_err" to="/xtopic_chassis/clear_err" />
+    </node>
+</launch>

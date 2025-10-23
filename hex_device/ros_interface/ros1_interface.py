@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
 
+import threading
 import rospy
 import rospkg
 from typing import Callable
@@ -22,6 +23,11 @@ class DataInterface(InterfaceBase):
         # Initialize rate control
         self.ros_rate = rospy.get_param('~rate_ros', 300.0)
         self._rate = rospy.Rate(self.ros_rate)
+
+        ### ROS1 does not need to use spin, and can also use sleep() to process callback
+        # Start spin thread
+        # self.__spin_thread = threading.Thread(target=self.__spin)
+        # self.__spin_thread.start()
 
     # ========== Topic management (generic) ==========
 
@@ -118,7 +124,7 @@ class DataInterface(InterfaceBase):
             Parameter value
         """
         try:
-            return rospy.get_param(name, default)
+            return rospy.get_param(f'~{name}', default)
         except Exception:
             return default
 
@@ -147,7 +153,7 @@ class DataInterface(InterfaceBase):
         try:
             self._rate = rospy.Rate(hz)
         except Exception as e:
-            self.loge(f"Failed to create rate: {e}")
+            self.loge(f"Failed to set rate: {e}")
 
     def sleep(self):
         """Sleep according to rate"""
@@ -165,7 +171,14 @@ class DataInterface(InterfaceBase):
     def shutdown(self):
         """Shutdown ROS node"""
         try:
-            rospy.signal_shutdown("Normal shutdown")
+            # Signal ROS shutdown
+            if not rospy.is_shutdown():
+                rospy.signal_shutdown("Normal shutdown")
+                
+            ### ROS1 does not need to use spin, and can also use sleep() to process callback
+            # Wait for spin thread to finish
+            # if self.__spin_thread and self.__spin_thread.is_alive():
+            #     self.__spin_thread.join(timeout=1.0)
         except Exception:
             pass
 
@@ -219,3 +232,16 @@ class DataInterface(InterfaceBase):
         except Exception as e:
             self.loge(f"An error occurred while getting the path for package '{package_name}': {e}")
             return ""
+        
+    def get_timestamp(self):
+        return rospy.Time.now()
+
+    # ========== Internal methods ==========
+
+    def __spin(self):
+        """Spin ROS1 in separate thread"""
+        try:
+            rospy.spin()
+        except Exception:
+            # Ignore exceptions during shutdown (ROSInterruptException)
+            pass

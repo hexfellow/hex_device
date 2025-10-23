@@ -148,7 +148,7 @@ class DataInterface(InterfaceBase):
         try:
             self._rate = self.__node.create_rate(hz)
         except Exception as e:
-            self.loge(f"Failed to create rate: {e}")
+            self.loge(f"Failed to set rate: {e}")
 
     def sleep(self):
         """Sleep according to rate"""
@@ -227,6 +227,9 @@ class DataInterface(InterfaceBase):
         except Exception as e:
             self.loge(f"An error occurred while getting the path for package '{package_name}': {e}")
             return ""
+        
+    def get_timestamp(self):
+        return self.__node.get_clock().now().to_msg()
 
     # ========== Internal methods ==========
 

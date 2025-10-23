@@ -5,7 +5,6 @@
 # Author: Jecjune zejun.chen@hexfellow.com
 # Date  : 2025-8-1
 ################################################################
-import re
 import time
 import asyncio
 import logging
@@ -18,7 +17,63 @@ async def delay(start_time, ms):
 
 
 # Create a logger for the hex_device package
-_logger = logging.getLogger(__name__.split('.')[0])  # Use 'hex_device' as logger name
+_logger = logging.getLogger(__name__.split('.')[0])  # Use 'hex_device_py' as logger name
+
+# ANSI color codes for terminal output
+class LogColors:
+    """ANSI color codes for different log levels"""
+    RESET = '\033[0m'
+    DEBUG = '\033[36m'      # Cyan
+    WARNING = '\033[33m'    # Yellow
+    ERROR = '\033[31m'      # Red
+    CRITICAL = '\033[35m'   # Magenta
+
+class ColoredFormatter(logging.Formatter):
+    """Custom formatter with colors for different log levels"""
+
+    COLORS = {
+        logging.DEBUG: LogColors.DEBUG,
+        logging.INFO: None,  # No color for INFO
+        logging.WARNING: LogColors.WARNING,
+        logging.ERROR: LogColors.ERROR,
+        logging.CRITICAL: LogColors.CRITICAL,
+    }
+
+    def format(self, record):
+        color = self.COLORS.get(record.levelno)
+
+        # Format the base message
+        log_fmt = f'{color}[%(levelname)s] %(message)s{LogColors.RESET}' if color else '[%(levelname)s] %(message)s'
+        formatter = logging.Formatter(log_fmt)
+        formatted = formatter.format(record)
+
+        # Handle multiline: add color to each continuation line
+        if color and '\n' in formatted:
+            lines = formatted.split('\n')
+            colored_lines = []
+            for line in lines:
+                if line:  # Skip empty lines
+                    colored_lines.append(f"{color}{line}{LogColors.RESET}")
+                else:
+                    colored_lines.append(line)
+            return '\n'.join(colored_lines)
+
+        return formatted
+
+# Configure logger to output to console
+if not _logger.handlers:  # Only configure once
+    _logger.setLevel(logging.DEBUG)  # Set minimum level to DEBUG
+
+    # Create console handler
+    _console_handler = logging.StreamHandler()
+    _console_handler.setLevel(logging.DEBUG)
+
+    # Create colored formatter
+    _formatter = ColoredFormatter()
+    _console_handler.setFormatter(_formatter)
+
+    # Add handler to logger
+    _logger.addHandler(_console_handler)
 
 def log_warn(message):
     """Log warning message"""

@@ -173,3 +173,8 @@ class InterfaceBase(ABC):
     def get_pkg_share_path(self, package_name: str) -> str:
         """Get ROS package shared directory path"""
         pass
+
+    @abstractmethod
+    def get_timestamp(self):
+        """Get current time stamp"""
+        pass

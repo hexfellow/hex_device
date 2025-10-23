@@ -37,6 +37,8 @@ setup(
     entry_points={
         'console_scripts': [
             "arm_trans = hex_device.arm_trans:main",
+            "chassis_trans = hex_device.chassis_trans:main",
+            "chassis_key_control = hex_device.chassis_key_control:main"
         ],
     },
 )

@@ -52,11 +52,11 @@ class HexArmApi:
         self.ros_interface = DataInterface(name="xnode_arm")
 
         # 2. Get parameters
-        arm_series = self.ros_interface.get_parameter('~arm_series', 0)
-        gripper_type = self.ros_interface.get_parameter('~gripper_type', 0)
-        control_hz = self.ros_interface.get_parameter('~rate_ros', 300.0)
-        joint_config_path = self.ros_interface.get_parameter('~joint_config_path', None)
-        init_pose_path = self.ros_interface.get_parameter('~init_pose_path', None)
+        arm_series = self.ros_interface.get_parameter('arm_series', 0)
+        gripper_type = self.ros_interface.get_parameter('gripper_type', 0)
+        control_hz = self.ros_interface.get_parameter('rate_ros', 300.0)
+        joint_config_path = self.ros_interface.get_parameter('joint_config_path', None)
+        init_pose_path = self.ros_interface.get_parameter('init_pose_path', None)
 
         # 3. Create shared topics (ws_down, ws_up)
         self.ws_down_pub = self.ros_interface.create_publisher('ws_down', UInt8MultiArray, 10)
@@ -69,64 +69,55 @@ class HexArmApi:
         self.joint_states_pub = None
         self._is_init = False
 
-        if arm_series != 0:
-            # Convert arm_series (int) to robot_type (RobotType enum)
-            if arm_series in ArmArcher.ARM_SERIES_TO_ROBOT_TYPE:
-                robot_type = ArmArcher.ARM_SERIES_TO_ROBOT_TYPE[arm_series]
+        if arm_series != 0 and ArmArcher._supports_robot_type(arm_series):
+            arm_config = ArmConfig()
+            self.arm = ArmArcher(
+                robot_type=arm_series,
+                motor_count=arm_config.arm_motor_map[arm_series],
+                control_hz=control_hz,
+                send_message_callback=self._pub_ws_down
+            )
+            self.arm._set_robot_type(arm_series)
 
-                # Check if this robot type is supported
-                if ArmArcher._supports_robot_type(robot_type):
-                    arm_config = ArmConfig()
-                    self.arm = ArmArcher(
-                        robot_type=robot_type,
-                        motor_count=arm_config.arm_motor_map[robot_type],
-                        control_hz=control_hz,
-                        send_message_callback=self._pub_ws_down
-                    )
-                    self.arm._set_robot_type(robot_type)
+            # Load configuration using device methods
+            # arm joint config is solid for now, this code is not used
+            if joint_config_path:
+                self.joint_config = self.arm.get_config_from_json(
+                    joint_config_path, self.ros_interface)
 
-                    # Load configuration using device methods
-                    # arm joint config is solid for now, this code is not used
-                    if joint_config_path:
-                        self.joint_config = self.arm.get_config_from_json(
-                            joint_config_path, self.ros_interface)
-
-                    if init_pose_path:
-                        init_config = self.arm.get_init_pose_config(
-                            init_pose_path, self.ros_interface)
-                        if init_config:
-                            self.init_pose = init_config.get('init_pose', None)
-                            self.step_limits = init_config.get('step_limits', None)
-                            self.ros_interface.logi(f"Init pose: {self.init_pose}")
-                            if self.step_limits:
-                                self.ros_interface.logi(f"Step limits: {self.step_limits}")
-                        else:
-                            self.init_pose = None
-                            self.step_limits = None
-                    else:
-                        self.init_pose = None
-                        self.step_limits = None
-
-                    # Create Arm-specific topics
-                    self.joint_cmd_sub = self.ros_interface.create_subscription(
-                        '/xtopic_arm/joints_cmd',
-                        XmsgArmJointParamList,
-                        self._joint_cmd_callback,
-                        10
-                    )
-                    self.joint_states_pub = self.ros_interface.create_publisher(
-                        '/xtopic_arm/joint_states',
-                        JointState,
-                        10
-                    )
-
-                    self._is_init = True
+            if init_pose_path:
+                init_config = self.arm.get_init_pose_config(
+                    init_pose_path, self.ros_interface)
+                if init_config:
+                    self.init_pose = init_config.get('init_pose', None)
+                    self.step_limits = init_config.get('step_limits', None)
+                    self.ros_interface.logi(f"Init pose: {self.init_pose}")
+                    if self.step_limits:
+                        self.ros_interface.logi(f"Step limits: {self.step_limits}")
                 else:
-                    self.ros_interface.loge(f"Arm robot type {robot_type} is not supported")
+                    self.init_pose = None
+                    self.step_limits = None
             else:
-                self.ros_interface.loge(f"Unknown arm series {arm_series}")
+                self.init_pose = None
+                self.step_limits = None
+
+            # Create Arm-specific topics
+            self.joint_cmd_sub = self.ros_interface.create_subscription(
+                '/xtopic_arm/joints_cmd',
+                XmsgArmJointParamList,
+                self._joint_cmd_callback,
+                10
+            )
+            self.joint_states_pub = self.ros_interface.create_publisher(
+                '/xtopic_arm/joint_states',
+                JointState,
+                10
+            )
+
+            self._is_init = True
         else:
-            self.ros_interface.logw("Arm series not specified, skipping arm initialization")
+            self._is_init = False
+            self.ros_interface.loge(f"Arm series {arm_series} is not supported, initializing failed.")
 
         # 5. Create Hands device
         self.hands = None
@@ -134,38 +125,31 @@ class HexArmApi:
         self.gripper_states_pub = None
 
         if gripper_type != 0:
-            # Convert gripper_type (int) to hand_type (HandType enum)
-            if gripper_type in Hands.ARM_SERIES_TO_HAND_TYPE:
-                hand_type = Hands.ARM_SERIES_TO_HAND_TYPE[gripper_type]
+            if Hands._supports_hand_type(gripper_type):
+                gripper_config = GripperConfig()
+                self.hands = Hands(
+                    hand_type=gripper_type,
+                    motor_count=gripper_config.gripper_motor_map[gripper_type],
+                    control_hz=control_hz,
+                    send_message_callback=self._pub_ws_down
+                )
 
-                # Check if this hand type is supported
-                if Hands._supports_hand_type(hand_type):
-                    gripper_config = GripperConfig()
-                    self.hands = Hands(
-                        hand_type=hand_type,
-                        motor_count=gripper_config.gripper_motor_map[hand_type],
-                        control_hz=control_hz,
-                        send_message_callback=self._pub_ws_down
-                    )
-
-                    # Create Hands-specific topics
-                    self.gripper_cmd_sub = self.ros_interface.create_subscription(
-                        '/xtopic_arm/gripper_cmd',
-                        XmsgArmJointParamList,
-                        self._gripper_cmd_callback,
-                        10
-                    )
-                    self.gripper_states_pub = self.ros_interface.create_publisher(
-                        '/xtopic_arm/gripper_states',
-                        JointState,
-                        10
-                    )
-                else:
-                    self.ros_interface.loge(f"Hand type {hand_type} is not supported")
+                # Create Hands-specific topics
+                self.gripper_cmd_sub = self.ros_interface.create_subscription(
+                    '/xtopic_arm/gripper_cmd',
+                    XmsgArmJointParamList,
+                    self._gripper_cmd_callback,
+                    10
+                )
+                self.gripper_states_pub = self.ros_interface.create_publisher(
+                    '/xtopic_arm/gripper_states',
+                    JointState,
+                    10
+                )
             else:
-                self.ros_interface.loge(f"Unknown gripper type {gripper_type}")
+                self.ros_interface.loge(f"Unsupported gripper type: {gripper_type}")
         else:
-            self.ros_interface.logi("Gripper type not specified, skipping hands initialization")
+            self.ros_interface.logw("No gripper specified, skipping init gripper")
 
     async def _pub_ws_down(self, data):
         """Unified ws_down publishing function, shared by all devices"""

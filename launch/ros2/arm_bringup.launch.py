@@ -76,10 +76,10 @@ def generate_launch_description():
         ]
     )
 
-    hex_device_node = Node(
+    hex_arm_node = Node(
         package='hex_device',
         executable='arm_trans',
-        name='hex_device',
+        name='hex_arm',
         output='screen',
         emulate_tty=True,
         parameters=[{
@@ -108,5 +108,5 @@ def generate_launch_description():
         arm_series,
         # nodes
         xpkg_bridge_node,
-        hex_device_node
+        hex_arm_node
     ])
