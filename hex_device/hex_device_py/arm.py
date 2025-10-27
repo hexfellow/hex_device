@@ -6,6 +6,7 @@
 # Date  : 2025-8-1
 ################################################################
 
+import threading
 import time
 import numpy as np
 from typing import Optional, Tuple, List, Dict, Any, Union
@@ -15,18 +16,15 @@ from .motor_base import MitMotorCommand, MotorBase, MotorError, MotorCommand, Co
 from .generated import public_api_down_pb2, public_api_up_pb2, public_api_types_pb2
 from .generated.public_api_types_pb2 import (ArmStatus)
 from .arm_config import get_arm_config, ArmConfig, arm_config_manager
-from copy import deepcopy
+import copy
 
 
-class ArmArcher(DeviceBase, MotorBase):
+class Arm(DeviceBase, MotorBase):
     """
-    ArmArcher class
+    Arm class
 
-    Inherits from DeviceBase and MotorBase, mainly implements control of ArmArcher
+    Inherits from DeviceBase and MotorBase, mainly implements control of Arm
 
-    Supported robot types:
-    - RtArmSaberD6X: Custom PCW vehicle
-    - RtArmSaberD7X: PCW vehicle
     """
 
     SUPPORTED_ROBOT_TYPES = [
@@ -48,9 +46,9 @@ class ArmArcher(DeviceBase, MotorBase):
     def __init__(self,
                  robot_type,
                  motor_count,
-                 name: str = "ArmArcher",
+                 name: str = "Arm",
                  control_hz: int = 500,
-                 send_message_callback = None):
+                 send_message_callback=None):
         """
         Initialize chassis Maver
         
@@ -64,22 +62,27 @@ class ArmArcher(DeviceBase, MotorBase):
         DeviceBase.__init__(self, name, send_message_callback)
         MotorBase.__init__(self, motor_count, name)
 
-        self.name = name or "ArmArcher"
+        self.name = name or "Arm"
         self._control_hz = control_hz
         self._period = 1.0 / control_hz
         self._arm_series = robot_type
 
         # arm status
-        self._arm_state = public_api_types_pb2.ArmState.AsParked
+        self._status_lock = threading.Lock()
+        self._arm_mode = public_api_types_pb2.ArmMode.AmBrake
         self._api_control_initialized = False
         self._calibrated = False
         self._parking_stop_detail = public_api_types_pb2.ParkingStopDetail()
+        self._session_holder = 0
+        self._previous_session_holder = None
 
         # Control related
         self._command_timeout_check = True
         self._last_command_time = None
         self._command_timeout = 0.3  # 300ms
         self.__last_warning_time = time.perf_counter()  # last log warning time
+        self._my_session_id = 0   # my session id, was assigned by server
+        self.__send_init: Optional[bool] = None
 
     def _set_robot_type(self, robot_type):
         """
@@ -114,13 +117,10 @@ class ArmArcher(DeviceBase, MotorBase):
             bool: Whether initialization was successful
         """
         try:
-            msg = self._construct_init_message()
-            await self._send_message(msg)
-            msg = self._construct_calibrate_message()
-            await self._send_message(msg)
+            # self.start()
             return True
         except Exception as e:
-            log_err(f"ArmArcher initialization failed: {e}")
+            log_err(f"Arm initialization failed: {e}")
             return False
 
     def _update(self, api_up_data) -> bool:
@@ -134,27 +134,40 @@ class ArmArcher(DeviceBase, MotorBase):
             bool: Whether update was successful
         """
         try:
+            if api_up_data.HasField('log'):
+                log_warn(f"Arm: Get log from server: {api_up_data.log}")
+
             if not api_up_data.HasField('arm_status'):
                 return False
-
             arm_status = api_up_data.arm_status
 
-            # Update robotic arm status
-            self._arm_state = arm_status.state
-            self._api_control_initialized = arm_status.api_control_initialized
-            self._calibrated = arm_status.calibrated
+            with self._status_lock:
+                # update my session id
+                self._my_session_id = api_up_data.session_id
+                # Update robotic arm status
+                self._arm_mode = arm_status.current_mode
+                self._api_control_initialized = arm_status.api_control_initialized
+                self._calibrated = arm_status.calibrated
+                self._session_holder = arm_status.session_holder
 
-            if arm_status.HasField('parking_stop_detail'):
-                self._parking_stop_detail = arm_status.parking_stop_detail
-            else:
-                self._parking_stop_detail = public_api_types_pb2.ParkingStopDetail()
+                if self._session_holder != self._previous_session_holder:
+                    if self._session_holder == self._my_session_id:
+                        log_warn(f"Arm: You can control the arm now! Your session ID: {self._session_holder}")
+                    else:
+                        log_warn(f"Arm: Can not control the arm, now holder is ID: {self._session_holder}, waiting...")
+                self._previous_session_holder = self._session_holder
+
+                if arm_status.HasField('parking_stop_detail'):
+                    self._parking_stop_detail = arm_status.parking_stop_detail
+                else:
+                    self._parking_stop_detail = public_api_types_pb2.ParkingStopDetail()
 
             # Update motor data
             self._update_motor_data_from_arm_status(arm_status)
             self.set_has_new_data()
             return True
         except Exception as e:
-            log_err(f"ArmArcher data update failed: {e}")
+            log_err(f"Arm data update failed: {e}")
             return False
 
     def _update_motor_data_from_arm_status(self, arm_status: ArmStatus):
@@ -225,7 +238,7 @@ class ArmArcher(DeviceBase, MotorBase):
         self.__last_warning_time = start_time
 
         await self._init()
-        log_info("ArmArcher init success")
+        log_info("Arm init success")
         while True:
             await delay(start_time, cycle_time)
             start_time = time.perf_counter()
@@ -240,8 +253,11 @@ class ArmArcher(DeviceBase, MotorBase):
 
                     # auto clear api communication timeout
                     if error.category == public_api_types_pb2.ParkingStopCategory.PscAPICommunicationTimeout:
+                        log_warn(f"You have disconnected from arm, trying to connect again.")
                         msg = self._construct_clear_parking_stop_message()
                         await self._send_message(msg)
+                        # when timeout, the session holder will be release, should re-api-control-initialize again
+                        self.start()
 
                 # check motor error
                 for i in range(self.motor_count):
@@ -249,19 +265,38 @@ class ArmArcher(DeviceBase, MotorBase):
                         log_err(f"Warning: Motor {i} error occurred")
 
                 # prepare sending message
-                if self._api_control_initialized == False:
+                with self._status_lock:
+                    s = self.__send_init
+                    a = self._api_control_initialized
+                    c = self._calibrated
+                    sh = self._session_holder
+                    mi = self._my_session_id
+
+                ## send init message
+                if s is None:
+                    pass
+                elif s:
                     msg = self._construct_init_message()
                     await self._send_message(msg)
-                elif self._calibrated == False:
-                    # If there is anything that requires special action, modify this calibrate sending logic.
-                    msg = self._construct_calibrate_message()
+                    self.__send_init = None
+                elif not s:
+                    msg = self._construct_init_message(False)
                     await self._send_message(msg)
-                else:
-                    # no command
+                    self.__send_init = None
+
+                ## check if is holder:
+                if sh != mi:
+                    if start_time - self.__last_warning_time > 3.0:
+                        log_warn(f"Arm: Waiting to get the control of the arm...")
+                        self.__last_warning_time = start_time
+                    continue
+                
+                if a == True and c == True:
+                    ### no command
                     if self._last_command_time is None:
                         msg = self._construct_init_message()
                         await self._send_message(msg)
-                    # command timeout
+                    ### command timeout
                     elif self._command_timeout_check and (start_time -
                           self._last_command_time) > self._command_timeout:
                         try:
@@ -270,20 +305,39 @@ class ArmArcher(DeviceBase, MotorBase):
                             msg = self._construct_custom_joint_command_msg(motor_msg)
                             await self._send_message(msg)
                         except Exception as e:
-                            log_err(f"ArmArcher failed to construct custom joint command message: {e}")
+                            log_err(f"Arm failed to construct custom joint command message: {e}")
                             continue
-                    # normal command
+                    ### normal command
                     else:
                         try:
                             msg = self._construct_joint_command_msg()
                             await self._send_message(msg)
                         except Exception as e:
-                            log_err(f"ArmArcher failed to construct joint command message: {e}")
+                            log_err(f"Arm failed to construct joint command message: {e}")
                             continue
+                elif c == False:
+                    # If there is anything that requires special action, modify this calibrate sending logic.
+                    msg = self._construct_calibrate_message()
+                    await self._send_message(msg)
 
             except Exception as e:
-                log_err(f"ArmArcher periodic task exception: {e}")
+                log_err(f"Arm periodic task exception: {e}")
                 continue
+
+    def start(self):
+        """
+        Set init message to True to start the arm
+        """
+        with self._status_lock:
+            self.__send_init = True
+
+    def stop(self):
+        """
+        Set init message to False to stop the arm
+        """
+        print("setting stop")
+        with self._status_lock:
+            self.__send_init = False
 
     # Robotic arm specific methods
     def command_timeout_check(self, check_or_not: bool = True):
@@ -305,7 +359,7 @@ class ArmArcher(DeviceBase, MotorBase):
         mit_commands = []
         for i in range(self.motor_count):
             mit_commands.append(MitMotorCommand(position=pos[i], speed=speed[i], torque=torque[i], kp=kp[i], kd=kd[i]))
-        return deepcopy(mit_commands)
+        return copy.deepcopy(mit_commands)
 
     def motor_command(self, command_type: CommandType, values: Union[List[bool], List[float], List[MitMotorCommand], np.ndarray]):
         """
@@ -330,8 +384,13 @@ class ArmArcher(DeviceBase, MotorBase):
         """
         msg = public_api_down_pb2.APIDown()
         arm_command = public_api_types_pb2.ArmCommand()
+        
+        arm_exclusive_command = public_api_types_pb2.ArmExclusiveCommand()
         motor_targets = self._construct_target_motor_msg(self._pulse_per_rotation, self._period)
-        arm_command.motor_targets.CopyFrom(motor_targets)
+        arm_exclusive_command.motor_targets.CopyFrom(motor_targets)
+        arm_exclusive_command.target_mode = public_api_types_pb2.ArmMode.AmApiControl
+
+        arm_command.arm_exclusive_command.CopyFrom(arm_exclusive_command)
         msg.arm_command.CopyFrom(arm_command)
         return msg
 
@@ -341,23 +400,31 @@ class ArmArcher(DeviceBase, MotorBase):
         """
         msg = public_api_down_pb2.APIDown()
         arm_command = public_api_types_pb2.ArmCommand()
-        arm_command.motor_targets.CopyFrom(motor_msg)
+
+        arm_exclusive_command = public_api_types_pb2.ArmExclusiveCommand()
+        arm_exclusive_command.motor_targets.CopyFrom(motor_msg)
+        arm_exclusive_command.target_mode = public_api_types_pb2.ArmMode.AmApiControl
+
+        arm_command.arm_exclusive_command.CopyFrom(arm_exclusive_command)
         msg.arm_command.CopyFrom(arm_command)
         return msg
 
     def get_parking_stop_detail(
             self) -> public_api_types_pb2.ParkingStopDetail:
         """Get parking stop details"""
-        return deepcopy(self._parking_stop_detail)
+        return copy.deepcopy(self._parking_stop_detail)
 
     # msg constructor
-    def _construct_init_message(self) -> public_api_down_pb2.APIDown:
+    def _construct_init_message(self, api_control_initialize: bool = True) -> public_api_down_pb2.APIDown:
         """
         @brief: For constructing a init message.
         """
         msg = public_api_down_pb2.APIDown()
         arm_command = public_api_types_pb2.ArmCommand()
-        arm_command.api_control_initialize = True
+        arm_exclusive_command = public_api_types_pb2.ArmExclusiveCommand()
+        arm_exclusive_command.api_control_initialize = api_control_initialize
+        arm_exclusive_command.target_mode = public_api_types_pb2.ArmMode.AmApiControl
+        arm_command.arm_exclusive_command.CopyFrom(arm_exclusive_command)
         msg.arm_command.CopyFrom(arm_command)
         return msg
 
@@ -367,7 +434,10 @@ class ArmArcher(DeviceBase, MotorBase):
         """
         msg = public_api_down_pb2.APIDown()
         arm_command = public_api_types_pb2.ArmCommand()
-        arm_command.calibrate = True
+        arm_exclusive_command = public_api_types_pb2.ArmExclusiveCommand()
+        arm_exclusive_command.calibrate = True
+        arm_exclusive_command.target_mode = public_api_types_pb2.ArmMode.AmApiControl
+        arm_command.arm_exclusive_command.CopyFrom(arm_exclusive_command)
         msg.arm_command.CopyFrom(arm_command)
         return msg
 
@@ -377,7 +447,10 @@ class ArmArcher(DeviceBase, MotorBase):
         """
         msg = public_api_down_pb2.APIDown()
         arm_command = public_api_types_pb2.ArmCommand()
-        arm_command.clear_parking_stop = True
+        arm_exclusive_command = public_api_types_pb2.ArmExclusiveCommand()
+        arm_exclusive_command.clear_parking_stop = True
+        arm_exclusive_command.target_mode = public_api_types_pb2.ArmMode.AmApiControl
+        arm_command.arm_exclusive_command.CopyFrom(arm_exclusive_command)
         msg.arm_command.CopyFrom(arm_command)
         return msg
 
@@ -396,7 +469,7 @@ class ArmArcher(DeviceBase, MotorBase):
                 command = self._target_command
 
         # validate joint positions and velocities
-        validated_command = deepcopy(command)
+        validated_command = copy.deepcopy(command)
 
         if validated_command.command_type == CommandType.POSITION:
             validated_positions = self.validate_joint_positions(command.position_command, dt)
@@ -412,11 +485,11 @@ class ArmArcher(DeviceBase, MotorBase):
     # Configuration related methods
     def get_arm_config(self) -> Optional[ArmConfig]:
         """Get current robotic arm configuration"""
-        return deepcopy(get_arm_config(self._arm_series))
+        return copy.deepcopy(get_arm_config(self._arm_series))
 
     def get_joint_limits(self) -> Optional[List[List[float]]]:
         """Get joint limits"""
-        return deepcopy(arm_config_manager.get_joint_limits(self._arm_series))
+        return copy.deepcopy(arm_config_manager.get_joint_limits(self._arm_series))
 
     def validate_joint_positions(self,
                                  positions: List[float],
@@ -437,9 +510,9 @@ class ArmArcher(DeviceBase, MotorBase):
             current_positions = self.get_motor_positions()
             if len(current_positions) == len(positions):
                 arm_config_manager.set_last_positions(self._arm_series, current_positions)
-                log_common(f"ArmArcher: Initialize current motor positions: {current_positions}")
+                log_common(f"Arm: Initialize current motor positions: {current_positions}")
             else:
-                log_warn(f"ArmArcher: Current motor positions count({len(current_positions)}) does not match the target positions count({len(positions)})")
+                log_warn(f"Arm: Current motor positions count({len(current_positions)}) does not match the target positions count({len(positions)})")
         
         return arm_config_manager.validate_joint_positions(
             self._arm_series, positions, dt)
@@ -455,11 +528,11 @@ class ArmArcher(DeviceBase, MotorBase):
 
     def get_joint_names(self) -> Optional[List[str]]:
         """Get joint names"""
-        return deepcopy(arm_config_manager.get_joint_names(self._arm_series))
+        return copy.deepcopy(arm_config_manager.get_joint_names(self._arm_series))
 
     def get_expected_motor_count(self) -> Optional[int]:
         """Get expected motor count"""
-        return deepcopy(arm_config_manager.get_motor_count(self._arm_series))
+        return copy.deepcopy(arm_config_manager.get_motor_count(self._arm_series))
 
     def check_motor_count_match(self) -> bool:
         """Check if motor count matches configuration"""
@@ -470,12 +543,12 @@ class ArmArcher(DeviceBase, MotorBase):
 
     def get_arm_series(self) -> int:
         """Get robotic arm series"""
-        return deepcopy(self._arm_series)
+        return copy.deepcopy(self._arm_series)
 
     def get_arm_name(self) -> Optional[str]:
         """Get robotic arm name"""
         config = self.get_arm_config()
-        return deepcopy(config.name) if config else None
+        return copy.deepcopy(config.name) if config else None
 
     def reload_arm_config_from_dict(self, config_data: dict) -> bool:
         """
@@ -491,12 +564,12 @@ class ArmArcher(DeviceBase, MotorBase):
             success = arm_config_manager.reload_from_dict(
                 self._arm_series, config_data)
             if success:
-                log_common(f"ArmArcher: reload arm config success: {config_data.get('name', 'unknown')}")
+                log_common(f"Arm: reload arm config success: {config_data.get('name', 'unknown')}")
             else:
-                log_err(f"ArmArcher: reload arm config from dict failed: {config_data.get('name', 'unknown')}")
+                log_err(f"Arm: reload arm config from dict failed: {config_data.get('name', 'unknown')}")
             return success
         except Exception as e:
-            log_err(f"ArmArcher: reload arm config from dict exception: {e}")
+            log_err(f"Arm: reload arm config from dict exception: {e}")
             return False
 
     def set_initial_positions(self, positions: List[float]):
@@ -546,26 +619,3 @@ class ArmArcher(DeviceBase, MotorBase):
     def clear_motion_history(self):
         """Clear all motion history records (position and velocity)"""
         arm_config_manager.clear_motion_history(self._arm_series)
-
-    def get_init_pose_config(self, json_path: str, logger=None) -> Optional[Dict]:
-        """
-        Get initial pose configuration (Arm-specific)
-
-        Args:
-            json_path: Path to JSON configuration file
-            logger: Logger object (optional)
-
-        Returns:
-            Dictionary containing 'init_pose' and 'step_limits', returns None if loading fails
-        """
-        config = self.get_config_from_json(json_path, logger)
-        if config is None:
-            return None
-
-        result = {}
-        if 'init_pose' in config:
-            result['init_pose'] = config['init_pose']
-        if 'step_limits' in config:
-            result['step_limits'] = config['step_limits']
-
-        return result if result else None

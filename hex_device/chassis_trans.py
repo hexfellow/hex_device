@@ -7,6 +7,7 @@ import os
 import sys
 import numpy as np
 import time
+import signal
 from enum import Enum
 
 script_path = os.path.abspath(os.path.dirname(__file__))
@@ -62,7 +63,6 @@ class HexChassisApi:
     def _ws_up_callback(self, msg):
         api_up = public_api_up_pb2.APIUp()
         api_up.ParseFromString(bytes(msg.data))
-        self.ros_interface.logd("mother fucker10086")
 
         if self.init_state == InitState.PENDING and api_up.HasField('base_status'):
             motor_count = len(api_up.base_status.motor_status)
@@ -214,78 +214,87 @@ def run_async_in_thread(coro, stop_event):
         finally:
             loop.close()
 
+def signal_handler(signum, frame, stop_event, chassis_thread, api):
+    """Custom signal handler for graceful shutdown"""
+    # stop chassis
+    print("\n[Ctrl-C] Received shutdown signal")
+    api.chassis.stop()
+    time.sleep(0.5)
+
+    # Signal threads to stop
+    print("[Shutdown] Stopping async threads...")
+    stop_event.set()
+    
+    # Wait for threads to finish with timeout
+    if chassis_thread and chassis_thread.is_alive():
+        chassis_thread.join(timeout=2.0)
+        if chassis_thread.is_alive():
+            print("[Warning] Chassis thread did not stop gracefully")
+    
+    print("[Shutdown] Shutting down ROS interface...")
+    api.ros_interface.shutdown()
+    print("[Shutdown] Complete")
+    sys.exit(0)
+
 
  # ========== Main Function ==========
 
 def main():
     api = HexChassisApi()
     stop_event = threading.Event()
-    device_threads = []
 
-    try:
-        # Wait for chassis initialization
-        api.ros_interface.logi("Waiting for chassis initialization...")
-        timeout = 10.0 
-        start_time = time.perf_counter()
+    # Wait for chassis initialization
+    api.ros_interface.logi("Waiting for chassis API initialization...")
+    timeout = 10.0 
+    start_time = time.perf_counter()
 
-        while api.init_state == InitState.PENDING:
-            if not api.ros_interface.ok():
-                api.ros_interface.loge("ROS shutdown during initialization")
-                return
+    while api.init_state == InitState.PENDING:
+        if not api.ros_interface.ok():
+            api.ros_interface.loge("ROS shutdown during initialization")
+            return
 
-            # Check timeout
-            elapsed = time.perf_counter() - start_time
-            if elapsed > timeout:
-                api.ros_interface.loge(f"Chassis initialization timeout after {timeout}s")
-                api.ros_interface.shutdown()
-                return
-
-            time.sleep(0.1)
-
-        # Check if initialization succeeded
-        if api.init_state == InitState.FAILED:
-            api.ros_interface.loge("Chassis initialization failed")
+        # Check timeout
+        elapsed = time.perf_counter() - start_time
+        if elapsed > timeout:
+            api.ros_interface.loge(f"Chassis API initialization timeout after {timeout}s")
             api.ros_interface.shutdown()
             return
 
-        if api.chassis is not None:
-            chassis_thread = threading.Thread(
-                target=run_async_in_thread,
-                args=(api.chassis._periodic(), stop_event)
-            )
-            chassis_thread.daemon = True
-            chassis_thread.start()
-            device_threads.append(("chassis", chassis_thread))
-            api.ros_interface.logi("Chassis thread started successfully")
-        else:
-            api.ros_interface.loge("Chassis thread start failed.")
-            api.ros_interface.shutdown()
-            return
-    
-        while api.ros_interface.ok():
-            
-            # Publish motor states and odometry
-            api._publish_motor_states()
-            api._publish_odom()
+        time.sleep(0.1)
 
-            api.ros_interface.sleep()
-
-    except KeyboardInterrupt:
-        print("\n[Ctrl-C] Received shutdown signal")
-    finally:
-        # Stop threads
-        print("[Shutdown] Stopping async threads...")
-        stop_event.set()
-
-        for name, thread in device_threads:
-            if thread.is_alive():
-                thread.join(timeout=2.0)
-                if thread.is_alive():
-                    print(f"[Warning] {name} thread did not stop gracefully")
-
-        print("[Shutdown] Shutting down ROS interface...")
+    # Check if initialization succeeded
+    if api.init_state == InitState.FAILED:
+        api.ros_interface.loge("Chassis API initialization failed")
         api.ros_interface.shutdown()
-        print("[Shutdown] Complete")
+        return
+
+    chassis_thread = None
+    if api.chassis is not None:
+        chassis_thread = threading.Thread(
+            target=run_async_in_thread,
+            args=(api.chassis._periodic(), stop_event)
+        )
+        chassis_thread.daemon = True
+        chassis_thread.start()
+        api.ros_interface.logi("Chassis thread started successfully")
+    else:
+        api.ros_interface.loge("Chassis thread start failed.")
+        api.ros_interface.shutdown()
+        return
+    
+    # wait thread to start
+    time.sleep(0.2)
+
+    signal.signal(signal.SIGINT, lambda signum, frame: signal_handler(signum, frame, stop_event, chassis_thread, api))
+    signal.signal(signal.SIGTERM, lambda signum, frame: signal_handler(signum, frame, stop_event, chassis_thread, api))
+
+    while api.ros_interface.ok():
+        
+        # Publish motor states and odometry
+        api._publish_motor_states()
+        api._publish_odom()
+
+        api.ros_interface.sleep()
 
 if __name__ == '__main__':
     main()

@@ -27,7 +27,7 @@ from .generated import public_api_up_pb2, public_api_down_pb2, public_api_types_
 
 # Optional device implementations
 from .hands import Hands
-from .arm_archer import ArmArcher
+from .arm import Arm
 from .chassis import Chassis
 
 # Arm configuration system
@@ -70,7 +70,7 @@ __all__ = [
     'Hands',
 
     # Arm device
-    'ArmArcher',
+    'Arm',
 
     # Chassis device
     'Chassis',

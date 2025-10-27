@@ -1,0 +1,16 @@
+<launch>
+    <!-- Arguments -->
+    <arg name="url" default="ws://0.0.0.0:8439" doc="The URL of the robot." />
+    <arg name="read_only" default="false" doc="Whether to read only the chassis state." />
+
+    <!-- xpkg_bridge node -->
+    <node name="xnode_bridge" pkg="xpkg_bridge" type="xnode_bridge" respawn="false" output="screen" required="false">
+        <param name="url" value="$(arg url)"/>
+        <param name="read_only" value="$(arg read_only)"/>
+
+        <!-- Subscribe -->
+        <remap from="/ws_down" to="/ws_down" />
+        <!-- Publish -->
+        <remap from="/ws_up" to="/ws_up" />
+    </node>
+</launch>

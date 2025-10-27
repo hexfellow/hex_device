@@ -1,13 +1,20 @@
 <launch>
     <!-- arg -->
-    <arg name="url" default="" />
+    
+    <!-- Note: ROS1 launch does not provide control over node shutdown order.
+         It is recommended to launch xpkg_bridge_node separately to ensure proper
+         command forwarding during the shutdown phase and prevent premature termination
+         of the bridge node that may cause shutdown commands to fail. -->
+    <arg name="enable_bridge" default="false" doc="Whether to enable the xpkg_bridge node, you can set it to false if you want to launch the node separately." />
+
+    <arg name="url" default="ws://0.0.0.0:8439" />
     <arg name="read_only" default="false" />
     <arg name="frame_id" default="base_link" />
     <arg name="simple_mode" default="true" />
     <arg name="rate_ros" default="100.0" />
 
     <!-- node -->
-    <node name="xnode_bridge" pkg="xpkg_bridge" type="xnode_bridge" respawn="false" output="screen" required="false">
+    <node name="xnode_bridge" pkg="xpkg_bridge" type="xnode_bridge" respawn="false" output="screen" required="false", if="$(arg enable_bridge)">
         <param name="url" value="$(arg url)"/>
         <param name="read_only" value="$(arg read_only)"/>
 
