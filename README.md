@@ -66,31 +66,37 @@ Provides interface for hex mobile chassis with odometry support.
 ## Launch Files
 
 ### ROS1
-- `launch/ros1/arm_bringup.launch` - Launch arm device node
-- `launch/ros1/chassis_bringup.launch` - Launch chassis device node
+- `launch/ros1/xpkg_bridge.launch` - Launch bridge node only
+- `launch/ros1/arm_bringup.launch` - Launch arm device node (bridge optional via `enable_bridge` parameter)
+- `launch/ros1/chassis_bringup.launch` - Launch chassis device node (bridge optional via `enable_bridge` parameter)
 
 ### ROS2
-- `launch/ros2/arm_bringup.launch.py` - Launch arm device node
-- `launch/ros2/chassis_bringup.launch.py` - Launch chassis device node
+- `launch/ros2/xpkg_bridge.launch.py` - Launch bridge node only
+- `launch/ros2/arm_bringup.launch.py` - Launch arm device node (bridge optional via `enable_bridge` parameter)
+- `launch/ros2/chassis_bringup.launch.py` - Launch chassis device node (bridge optional via `enable_bridge` parameter)
 
 ## Example Usage
 
 ### Launch Arm (ROS1)
 ```bash
-roslaunch hex_device arm_bringup.launch url:=ws://{YOUR_IP}:8439
+roslaunch hex_device xpkg_bridge.launch url:=ws://{YOUR_IP}:8439
+roslaunch hex_device arm_bringup.launch
 ```
 
 ### Launch Arm (ROS2)
 ```bash
-ros2 launch hex_device arm_bringup.launch.py url:=ws://{YOUR_IP}:8439
+ros2 launch hex_device xpkg_bridge.launch url:=ws://{YOUR_IP}:8439
+ros2 launch hex_device arm_bringup.launch.py
 ```
 
 ### Launch Chassis (ROS1)
 ```bash
-roslaunch hex_device chassis_bringup.launch url:=ws://{YOUR_IP}:8439
+roslaunch hex_device xpkg_bridge.launch url:=ws://{YOUR_IP}:8439
+roslaunch hex_device chassis_bringup.launch
 ```
 
 ### Launch Chassis (ROS2)
 ```bash
-ros2 launch hex_device chassis_bringup.launch.py url:=ws://{YOUR_IP}:8439
+ros2 launch hex_device xpkg_bridge.launch url:=ws://{YOUR_IP}:8439
+ros2 launch hex_device chassis_bringup.launch.py
 ```
