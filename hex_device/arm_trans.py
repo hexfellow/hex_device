@@ -50,7 +50,7 @@ class HexArmApi:
     """
 
     def __init__(self):
-        # 1. Create pure ROS interface
+        # 1. Create ROS interface
         self.ros_interface = DataInterface(name="xnode_arm")
 
         # 2. Get parameters
@@ -125,10 +125,11 @@ class HexArmApi:
         self.gripper_states_pub = None
 
         if gripper_type != 0:
-            if Hands._supports_hand_type(gripper_type):
+            if Hands._supports_device_id(gripper_type):
                 gripper_config = GripperConfig()
                 self.hands = Hands(
-                    hand_type=gripper_type,
+                    device_id=1,
+                    device_type=gripper_type,
                     motor_count=gripper_config.gripper_motor_map[gripper_type],
                     control_hz=control_hz,
                     send_message_callback=self._pub_ws_down

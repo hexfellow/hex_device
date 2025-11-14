@@ -141,7 +141,7 @@ class HexChassisApi:
 
     def _clear_err_callback(self, msg):
         if self.chassis is not None and msg.data:
-            self.chassis.request_clear_error()
+            self.chassis.clear_parking_stop()
 
     def _publish_odom(self):
         if self.chassis is not None and self.chassis._has_new_data:

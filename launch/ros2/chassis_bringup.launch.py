@@ -22,7 +22,7 @@ def generate_launch_description():
 
     url = DeclareLaunchArgument(
         'url',
-        default_value='',
+        default_value='0.0.0.0:8439',
         description='The URL of the robot.'
     )
 
@@ -30,6 +30,12 @@ def generate_launch_description():
         'read_only',
         default_value='false',
         description='Whether to read only the chassis state.'
+    )
+
+    is_kcp = DeclareLaunchArgument(
+        "is_kcp",
+        default_value="true",
+        description="Is KCP mode"
     )
 
     frame_id = DeclareLaunchArgument(
@@ -50,16 +56,17 @@ def generate_launch_description():
     )
 
     # Define the node
-    xpkg_bridge_node = Node(
-        package='xpkg_bridge',
-        executable='xnode_bridge',
-        name='xnode_bridge',
+    hex_bridge_node = Node(
+        package='hex_bridge',
+        executable='hex_bridge',
+        name='hex_bridge',
         output='screen',
         emulate_tty=True,
         condition=IfCondition(LaunchConfiguration('enable_bridge')),
         parameters=[{
             'url': LaunchConfiguration('url'),
             'read_only': LaunchConfiguration('read_only'),
+            "is_kcp": LaunchConfiguration("is_kcp"),
         }],
         remappings=[
             # subscribe
@@ -96,9 +103,10 @@ def generate_launch_description():
         enable_bridge,
         url,
         read_only,
+        is_kcp,
         frame_id,
         simple_mode,
         rate_ros,
-        xpkg_bridge_node,
+        hex_bridge_node,
         hex_chassis_node
     ])

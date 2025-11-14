@@ -7,9 +7,7 @@
   <maintainer email="2375899670@qq.com">weekleaf</maintainer>
   <license>TODO: License declaration</license>
 
-  <buildtool_depend condition="$ROS_VERSION == 1">catkin</buildtool_depend>
   <export>
-    <build_type condition="$ROS_VERSION == 2">ament_python</build_type>
-    <gazebo_ros gazebo_model_path="${prefix}/.." condition="$ROS_VERSION == 2"/>
+    <build_type>ament_python</build_type>
   </export>
 </package>

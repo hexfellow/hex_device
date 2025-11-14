@@ -24,7 +24,7 @@ def generate_launch_description():
 
     url = DeclareLaunchArgument(
         'url',
-        default_value='ws://0.0.0.0:8439',
+        default_value='0.0.0.0:8439',
         description='The URL of the robot.'
     )
 
@@ -34,6 +34,11 @@ def generate_launch_description():
         description='Whether to read only the arm state.'
     )
 
+    is_kcp = DeclareLaunchArgument(
+        "is_kcp",
+        default_value="true",
+        description="Is KCP mode"
+    )
 
     rate_ros = DeclareLaunchArgument(
         'rate_ros',
@@ -70,16 +75,17 @@ def generate_launch_description():
     )
 
     # Define the node
-    xpkg_bridge_node = Node(
-        package='xpkg_bridge',
-        executable='xnode_bridge',
-        name='xnode_bridge',
+    hex_bridge_node = Node(
+        package='hex_bridge',
+        executable='hex_bridge',
+        name='hex_bridge',
         output='screen',
         emulate_tty=True,
         condition=IfCondition(LaunchConfiguration('enable_bridge')),
         parameters=[{
             'url': LaunchConfiguration('url'),
             'read_only': LaunchConfiguration('read_only'),
+            "is_kcp": LaunchConfiguration("is_kcp"),
         }],
         remappings=[
             # subscribe
@@ -96,6 +102,7 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
         parameters=[{
+            'rate_ros': LaunchConfiguration('rate_ros'),
             'joint_config_path': LaunchConfiguration('joint_config_path'),
             'init_pose_path': LaunchConfiguration('init_pose_path'),
             'gripper_type': LaunchConfiguration('gripper_type'),
@@ -115,12 +122,13 @@ def generate_launch_description():
         enable_bridge,
         url,
         read_only,
+        is_kcp,
         rate_ros,
         joint_config_path,
         init_pose_path,
         gripper_type,
         arm_series,
         # nodes
-        xpkg_bridge_node,
+        hex_bridge_node,
         hex_arm_node
     ])

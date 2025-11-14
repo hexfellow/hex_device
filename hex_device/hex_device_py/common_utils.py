@@ -13,8 +13,15 @@ import logging
 async def delay(start_time, ms):
     end_time = start_time + ms / 1000
     now = time.perf_counter()
-    await asyncio.sleep(end_time - now)
-
+    sleep_time = end_time - now
+    # Handle negative delay (when we're already past the target time)
+    if sleep_time <= 0:
+        # Log warning if delay is significantly negative (> 1ms)
+        if sleep_time < -0.001:
+            log_warn(f"HexDevice: Negative delay detected: {sleep_time*1000:.2f}ms - cycle overrun")
+        return  # Don't sleep if we're already late
+    
+    await asyncio.sleep(sleep_time)
 
 # Create a logger for the hex_device package
 _logger = logging.getLogger(__name__.split('.')[0])  # Use 'hex_device_py' as logger name

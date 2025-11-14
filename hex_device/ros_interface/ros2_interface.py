@@ -11,7 +11,6 @@ from .interface_base import InterfaceBase
 class DataInterface(InterfaceBase):
     """
     ROS2 interface implementation
-    Only provides ROS2 atomic operations, does not preset any topics or callbacks
     """
 
     def __init__(self, name: str):
@@ -83,7 +82,6 @@ class DataInterface(InterfaceBase):
         try:
             publisher.publish(msg)
         except Exception:
-            # Silently ignore publish errors during shutdown
             pass
 
     # ========== Timer ==========
@@ -219,15 +217,7 @@ class DataInterface(InterfaceBase):
             pass
 
     # ========== Tools ==========
-
-    def get_pkg_share_path(self, package_name: str) -> str:
-        """Get ROS package shared directory path"""
-        try:
-            return get_package_share_directory(package_name)
-        except Exception as e:
-            self.loge(f"An error occurred while getting the path for package '{package_name}': {e}")
-            return ""
-        
+   
     def get_timestamp(self):
         return self.__node.get_clock().now().to_msg()
 
@@ -238,5 +228,11 @@ class DataInterface(InterfaceBase):
         try:
             rclpy.spin(self.__node)
         except Exception:
-            # Ignore exceptions during shutdown (ExternalShutdownException)
+            pass
+
+    def spin_once(self):
+        """Spin ROS2 node once"""
+        try:
+            rclpy.spin_once(self.__node)
+        except Exception:
             pass
