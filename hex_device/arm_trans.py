@@ -29,10 +29,7 @@ class ArmConfig:
             public_api_types_pb2.RobotType.RtArmArcherD6Y: 6,
             public_api_types_pb2.RobotType.RtArmSaberD6X: 6,
             public_api_types_pb2.RobotType.RtArmSaberD7X: 7,
-            public_api_types_pb2.RobotType.RtArmSaber750d3Lr3DmDriver: 6,
-            public_api_types_pb2.RobotType.RtArmSaber750d4Lr3DmDriver: 7,
-            public_api_types_pb2.RobotType.RtArmSaber750h3Lr3DmDriver: 6,
-            public_api_types_pb2.RobotType.RtArmSaber750h4Lr3DmDriver: 7,
+            public_api_types_pb2.RobotType.RtArmArcherL6Y: 6,
         }
 
 
