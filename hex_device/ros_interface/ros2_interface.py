@@ -22,12 +22,11 @@ class DataInterface(InterfaceBase):
         self.__logger = self.__node.get_logger()
 
         # Initialize rate control
-        self.__node.declare_parameter('rate_ros', 300.0)
-        self.ros_rate = self.__node.get_parameter('rate_ros').value
-        self._rate = self.__node.create_rate(self.ros_rate)
+        self._rate = None
 
         # Start spin thread
-        self.__spin_thread = threading.Thread(target=self.__spin)
+        self.__spin_thread = threading.Thread(target=self.spin)
+        self.__spin_thread.daemon = True
         self.__spin_thread.start()
 
     # ========== Topic management (generic) ==========
@@ -105,21 +104,17 @@ class DataInterface(InterfaceBase):
 
     # ========== Parameter server ==========
 
-    def get_parameter(self, name: str, default=None):
+    def get_parameter(self, name: str):
         """
         Get parameter
 
         Args:
             name: Parameter name
-            default: Default value
-
-        Returns:
-            Parameter value
         """
         try:
             return self.__node.get_parameter(name).value
-        except Exception:
-            return default
+        except Exception as e:
+            self.loge(f"Failed to get parameter: {e}")
 
     def set_parameter(self, name: str, value):
         """
@@ -150,10 +145,10 @@ class DataInterface(InterfaceBase):
 
     def sleep(self):
         """Sleep according to rate"""
-        try:
+        if self._rate is not None:
             self._rate.sleep()
-        except Exception:
-            pass
+        else:
+            self.logw("Rate is not set")
 
     # ========== Lifecycle ==========
 
@@ -164,19 +159,9 @@ class DataInterface(InterfaceBase):
     def shutdown(self):
         """Shutdown ROS node"""
         try:
-            # First shutdown rclpy to stop spin thread
-            if rclpy.ok():
-                rclpy.shutdown()
-            # Wait for spin thread to finish
-            if self.__spin_thread and self.__spin_thread.is_alive():
-                self.__spin_thread.join(timeout=1.0)
-            # Then destroy node
-            try:
-                self.__node.destroy_node()
-            except Exception:
-                pass
+            self.__node.destroy_node()
+            rclpy.shutdown()
         except Exception:
-            # Ignore any shutdown errors
             pass
 
     # ========== Logging ==========
@@ -223,7 +208,7 @@ class DataInterface(InterfaceBase):
 
     # ========== Internal methods ==========
 
-    def __spin(self):
+    def spin(self):
         """Spin ROS2 node in separate thread"""
         try:
             rclpy.spin(self.__node)

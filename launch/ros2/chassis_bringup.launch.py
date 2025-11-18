@@ -11,13 +11,13 @@ def generate_launch_description():
     # Declare the launch arguments
 
     # Note: ROS2 launch does not provide control over node shutdown order.
-    # It is recommended to launch xpkg_bridge_node separately to ensure proper
+    # It is recommended to launch hex_bridge_node separately to ensure proper
     # command forwarding during the shutdown phase and prevent premature termination
     # of the bridge node that may cause shutdown commands to fail.
     enable_bridge = DeclareLaunchArgument(
         'enable_bridge',
         default_value='false',
-        description='Whether to enable the xpkg_bridge node, you can set it to false if you want to launch the node separately.'
+        description='Whether to enable the hex_bridge node, you can set it to false if you want to launch the node separately.'
     )
 
     url = DeclareLaunchArgument(
@@ -48,11 +48,6 @@ def generate_launch_description():
         'simple_mode',
         default_value='true',
         description='Simple mode of the chassis.'
-    )
-    rate_ros = DeclareLaunchArgument(
-        'rate_ros',
-        default_value='100.0',
-        description='Rate of the ROS2 node.'
     )
 
     # Define the node
@@ -85,16 +80,15 @@ def generate_launch_description():
         parameters=[{
             'frame_id': LaunchConfiguration('frame_id'),
             'simple_mode': LaunchConfiguration('simple_mode'),
-            'rate_ros': LaunchConfiguration('rate_ros'),
         }],
         remappings=[
             # subscribe
-            ('/xtopic_chassis/motor_states', '/xtopic_chassis/motor_states'),
-            ('/xtopic_chassis/odom', '/xtopic_chassis/odom'),
+            ('/xtopic_chassis/motor_states', '/motor_states'),
+            ('/xtopic_chassis/odom', '/odom'),
             # publish
-            ('/xtopic_chassis/joint_cmd', '/xtopic_chassis/joint_cmd'),
+            ('/xtopic_chassis/joint_cmd', '/joint_cmd'),
             ('/xtopic_chassis/cmd_vel', '/cmd_vel'),
-            ('/xtopic_chassis/clear_err', '/xtopic_chassis/clear_err')
+            ('/xtopic_chassis/clear_err', '/clear_err')
         ]
     )
 
@@ -106,7 +100,6 @@ def generate_launch_description():
         is_kcp,
         frame_id,
         simple_mode,
-        rate_ros,
         hex_bridge_node,
         hex_chassis_node
     ])

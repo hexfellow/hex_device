@@ -13,14 +13,10 @@ script_path = os.path.abspath(os.path.dirname(__file__))
 sys.path.append(script_path)
 
 from ros_interface import DataInterface
-from hex_device_py import Hands, Arm, public_api_up_pb2, public_api_down_pb2, public_api_types_pb2
-from hex_device_py.motor_base import CommandType
+from hex_device_py import Hands, Arm, public_api_up_pb2, public_api_down_pb2, public_api_types_pb2, CommandType
 from std_msgs.msg import UInt8MultiArray
 from xpkg_arm_msgs.msg import XmsgArmJointParamList
 from sensor_msgs.msg import JointState
-
-
-# ========== Device Configuration Mapping ==========
 
 class ArmConfig:
     """Arm configuration: mapping arm type to motor count"""
@@ -51,11 +47,14 @@ class HexArmApi:
         self.ros_interface = DataInterface(name="xnode_arm")
 
         # 2. Get parameters
-        arm_series = self.ros_interface.get_parameter('arm_series', 0)
-        gripper_type = self.ros_interface.get_parameter('gripper_type', 0)
-        control_hz = self.ros_interface.get_parameter('rate_ros', 300.0)
-        joint_config_path = self.ros_interface.get_parameter('joint_config_path', None)
-        init_pose_path = self.ros_interface.get_parameter('init_pose_path', None)
+        self.ros_interface.set_parameter('arm_series', 0)
+        arm_series = self.ros_interface.get_parameter('arm_series')
+        self.ros_interface.set_parameter('gripper_type', 0)
+        gripper_type = self.ros_interface.get_parameter('gripper_type')
+        self.ros_interface.set_parameter('joint_config_path', '')
+        joint_config_path = self.ros_interface.get_parameter('joint_config_path')
+        self.ros_interface.set_parameter('init_pose_path', '')
+        init_pose_path = self.ros_interface.get_parameter('init_pose_path')
 
         # 3. Create shared topics (ws_down, ws_up)
         self.ws_down_pub = self.ros_interface.create_publisher('ws_down', UInt8MultiArray, 10)
@@ -71,9 +70,9 @@ class HexArmApi:
         if arm_series != 0 and Arm._supports_robot_type(arm_series):
             arm_config = ArmConfig()
             self.arm = Arm(
+                control_hz=500,
                 robot_type=arm_series,
                 motor_count=arm_config.arm_motor_map[arm_series],
-                control_hz=control_hz,
                 send_message_callback=self._pub_ws_down
             )
             self.arm._set_robot_type(arm_series)
@@ -128,7 +127,6 @@ class HexArmApi:
                     device_id=1,
                     device_type=gripper_type,
                     motor_count=gripper_config.gripper_motor_map[gripper_type],
-                    control_hz=control_hz,
                     send_message_callback=self._pub_ws_down
                 )
 
@@ -149,6 +147,9 @@ class HexArmApi:
         else:
             self.ros_interface.logw("No gripper specified, skipping init gripper")
 
+        # 6. Other members
+        self.first_time = True
+
     async def _pub_ws_down(self, data):
         """Unified ws_down publishing function, shared by all devices"""
         try:
@@ -163,21 +164,26 @@ class HexArmApi:
         api_up = public_api_up_pb2.APIUp()
         api_up.ParseFromString(bytes(msg.data))
         robot_type = api_up.robot_type
-
-        # Distribute to arm
         if self.arm is not None and robot_type == self.arm.robot_type:
             self.arm._update(api_up)
-
-        # Distribute to hands
+            self._publish_joint_states()
         if self.hands is not None:
-            if hasattr(api_up, 'hand_status') and api_up.HasField('hand_status'):
-                self.hands._update_optional_data('hand_status', api_up.hand_status)
-
+            if hasattr(api_up, 'secondary_device_status') and api_up.secondary_device_status:
+                for secondary_device in api_up.secondary_device_status:
+                    device_id = secondary_device.device_id
+                    device_type = secondary_device.device_type
+                    if device_type and device_id == self.hands.device_id:
+                        self.hands._update_optional_data(device_type, secondary_device)
+                        self._publish_gripper_states()
+        
     # ========== Arm-specific topic callbacks ==========
 
     def _joint_cmd_callback(self, msg):
         """Process arm's joint commands"""
         if self.arm is not None and not self._is_init:
+            if self.first_time:
+                self.first_time = False
+                self.arm.start()
             self.ros_interface.process_motor_command(msg, self.arm, 'arm')
 
     def _publish_joint_states(self):
@@ -249,7 +255,7 @@ def run_async_in_thread(coro, stop_event):
         finally:
             loop.close()
 
-def signal_handler(signum, frame, stop_event, arm_thread, hands_thread, api):
+def signal_handler(signum, frame, stop_event, shutdown_event, arm_thread, hands_thread, api):
     """Custom signal handler for graceful shutdown"""
     # stop arm
     print("\n[Ctrl-C] Received shutdown signal")
@@ -274,7 +280,7 @@ def signal_handler(signum, frame, stop_event, arm_thread, hands_thread, api):
     print("[Shutdown] Shutting down ROS interface...")
     api.ros_interface.shutdown()
     print("[Shutdown] Complete")
-    sys.exit(0)
+    shutdown_event.set()
 
 
 # ========== Main Function ==========
@@ -288,6 +294,7 @@ def main():
 
     # Create stop event for graceful shutdown
     stop_event = threading.Event()
+    shutdown_event = threading.Event()
 
     # Start arm thread if arm exists
     arm_thread = None
@@ -315,40 +322,36 @@ def main():
     # wait thread to start
     time.sleep(0.2)
 
-    signal.signal(signal.SIGINT, lambda signum, frame: signal_handler(signum, frame, stop_event, arm_thread, hands_thread, api))
-    signal.signal(signal.SIGTERM, lambda signum, frame: signal_handler(signum, frame, stop_event, arm_thread, hands_thread, api))
+    signal.signal(signal.SIGINT, lambda signum, frame: signal_handler(signum, frame, stop_event, shutdown_event, arm_thread, hands_thread, api))
+    signal.signal(signal.SIGTERM, lambda signum, frame: signal_handler(signum, frame, stop_event, shutdown_event, arm_thread, hands_thread, api))
 
-    while api.ros_interface.ok():
+    api.arm.start()
+    while api.arm is not None and api._is_init and not shutdown_event.is_set():
         # Initial pose control
-        if api.arm is not None and api._is_init:
-            if api.init_pose is not None and isinstance(api.init_pose, list):
-                # Get current position
-                current_pos = np.array(api.arm.get_motor_positions())
-                target_pos = np.array(api.init_pose)
-                err = target_pos - current_pos
+        if api.init_pose is not None and isinstance(api.init_pose, list):
+            # Get current position
+            current_pos = np.array(api.arm.get_motor_positions())
+            target_pos = np.array(api.init_pose)
+            err = target_pos - current_pos
 
-                # Send command to arm
-                if api.step_limits is not None:
-                    step_limits = np.array(api.step_limits)
-                    err = np.clip(err, -step_limits, step_limits)
-                next_pos = current_pos + err
-                api.arm.motor_command(CommandType.POSITION, next_pos.tolist())
+            # Send command to arm
+            if api.step_limits is not None:
+                step_limits = np.array(api.step_limits)
+                err = np.clip(err, -step_limits, step_limits)
+            next_pos = current_pos + err
+            api.arm.motor_command(CommandType.POSITION, next_pos.tolist())
 
-                # Check if init pose is reached (within tolerance)
-                if np.allclose(current_pos, target_pos, atol=0.01):
-                    api.ros_interface.logi("Init pose reached.")
-                    api._is_init = False
-            else:
-                api.ros_interface.logi("Init pose is not set or is not a list, skipping init.")
+            # Check if init pose is reached (within tolerance)
+            if np.allclose(current_pos, target_pos, atol=0.05):
+                api.ros_interface.logi("Init pose reached.")
+                api.arm.stop()
                 api._is_init = False
-
-        # Publish states
-        api._publish_joint_states()
-        api._publish_gripper_states()
-
-        # Sleep
-        api.ros_interface.sleep()
-
+        else:
+            api.ros_interface.logi("Init pose is not set or is not a list, skipping init.")
+            api._is_init = False
+        time.sleep(0.01)
+    
+    shutdown_event.wait()
 
 if __name__ == '__main__':
     main()

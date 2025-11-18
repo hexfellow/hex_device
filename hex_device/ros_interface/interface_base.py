@@ -9,7 +9,7 @@ import json
 from abc import ABC, abstractmethod
 from typing import Callable
 from typing import Optional, Tuple, List, Dict, Any, Union
-from hex_device.hex_device_py import Arm, Hands, CommandType, MitMotorCommand, MotorBase
+from hex_device_py import Arm, Hands, CommandType, MitMotorCommand, MotorBase
 
 
 class InterfaceBase(ABC):
@@ -88,16 +88,12 @@ class InterfaceBase(ABC):
     # ========== Parameter server ==========
 
     @abstractmethod
-    def get_parameter(self, name: str, default=None):
+    def get_parameter(self, name: str):
         """
         Get parameter
 
         Args:
             name: Parameter name
-            default: Default value
-
-        Returns:
-            Parameter value
         """
         pass
 

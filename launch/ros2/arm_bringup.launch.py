@@ -13,13 +13,13 @@ def generate_launch_description():
     # Declare the launch arguments
 
     # Note: ROS2 launch does not provide control over node shutdown order.
-    # It is recommended to launch xpkg_bridge_node separately to ensure proper
+    # It is recommended to launch hex_bridge_node separately to ensure proper
     # command forwarding during the shutdown phase and prevent premature termination
     # of the bridge node that may cause shutdown commands to fail.
     enable_bridge = DeclareLaunchArgument(
         'enable_bridge',
         default_value='false',
-        description='Whether to enable the xpkg_bridge node, you can set it to false if you want to launch the node separately.'
+        description='Whether to enable the hex_bridge node, you can set it to false if you want to launch the node separately.'
     )
 
     url = DeclareLaunchArgument(
@@ -38,12 +38,6 @@ def generate_launch_description():
         "is_kcp",
         default_value="true",
         description="Is KCP mode"
-    )
-
-    rate_ros = DeclareLaunchArgument(
-        'rate_ros',
-        default_value='300',
-        description='The rate of the node.'
     )
 
     joint_config = FindPackageShare('hex_device').find(
@@ -102,17 +96,16 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
         parameters=[{
-            'rate_ros': LaunchConfiguration('rate_ros'),
             'joint_config_path': LaunchConfiguration('joint_config_path'),
             'init_pose_path': LaunchConfiguration('init_pose_path'),
             'gripper_type': LaunchConfiguration('gripper_type'),
             'arm_series': LaunchConfiguration('arm_series'),
         }],
         remappings=[
-            ('/xtopic_arm/joints_cmd', '/xtopic_arm/joints_cmd'),
-            ('/xtopic_arm/joint_states', '/xtopic_arm/joint_states'),
-            ('/xtopic_arm/gripper_cmd', '/xtopic_arm/gripper_cmd'),
-            ('/xtopic_arm/gripper_states', '/xtopic_arm/gripper_states'),
+            ('/xtopic_arm/joints_cmd', '/joints_cmd'),
+            ('/xtopic_arm/joint_states', '/joint_states'),
+            ('/xtopic_arm/gripper_cmd', '/gripper_cmd'),
+            ('/xtopic_arm/gripper_states', '/gripper_states'),
         ]
     )
 
@@ -123,7 +116,6 @@ def generate_launch_description():
         url,
         read_only,
         is_kcp,
-        rate_ros,
         joint_config_path,
         init_pose_path,
         gripper_type,

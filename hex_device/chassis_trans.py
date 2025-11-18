@@ -14,8 +14,7 @@ script_path = os.path.abspath(os.path.dirname(__file__))
 sys.path.append(script_path)
 
 from ros_interface import DataInterface
-from hex_device_py import Chassis, public_api_up_pb2, public_api_down_pb2, public_api_types_pb2
-from hex_device_py.motor_base import CommandType
+from hex_device_py import Chassis, CommandType, public_api_up_pb2, public_api_down_pb2, public_api_types_pb2
 from geometry_msgs.msg import TwistStamped, Twist
 from sensor_msgs.msg import JointState
 from nav_msgs.msg import Odometry
@@ -35,9 +34,10 @@ class HexChassisApi:
     def __init__(self):
         self.ros_interface = DataInterface(name="xnode_chassis")
 
-        self.frame_id = self.ros_interface.get_parameter('frame_id', 'base_link')
-        self.simple_mode = self.ros_interface.get_parameter('simple_mode', True)
-        self.control_hz = self.ros_interface.get_parameter('rate_ros', 100.0)
+        self.ros_interface.set_parameter('frame_id', 'base_link')
+        self.frame_id = self.ros_interface.get_parameter('frame_id')
+        self.ros_interface.set_parameter('simple_mode', True)
+        self.simple_mode = self.ros_interface.get_parameter('simple_mode')
 
         self.ws_down_pub = self.ros_interface.create_publisher('ws_down', UInt8MultiArray, 10)
         self.ws_up_sub = self.ros_interface.create_subscription(
@@ -51,6 +51,8 @@ class HexChassisApi:
         self.clear_err_sub = None
         self.motor_states_pub = None
         self.odom_pub = None
+
+        self.first_time = True
 
     async def _pub_ws_down(self, data):
         try:
@@ -77,12 +79,11 @@ class HexChassisApi:
                 self.chassis = Chassis(
                     motor_count=motor_count,
                     robot_type=robot_type,
-                    control_hz=self.control_hz,
                     send_message_callback=self._pub_ws_down
                 )
                 self.chassis._set_robot_type(robot_type)
-                self.chassis.enable()
-                self.chassis.start()
+                self.chassis._update(api_up)
+                self.chassis.clear_odom_bias()
 
                 if self.simple_mode == True:
                     self.cmd_vel_sub = self.ros_interface.create_subscription(
@@ -130,13 +131,21 @@ class HexChassisApi:
         if self.chassis is not None and self.init_state == InitState.SUCCESS:
           if api_up.robot_type == self.chassis.robot_type:
               self.chassis._update(api_up)
+              self._publish_odom()
+              self._publish_motor_states()
 
     def _joint_cmd_callback(self, msg):
         if self.chassis is not None:
+            if self.first_time:
+                self.first_time = False
+                self.chassis.start()
             self.chassis.motor_command(CommandType.SPEED, msg.velocity)
 
     def _cmd_vel_callback(self, msg):
         if self.chassis is not None:
+            if self.first_time:
+                self.first_time = False
+                self.chassis.start()
             self.chassis.set_vehicle_speed(msg.linear.x, msg.linear.y, msg.angular.z)
 
     def _clear_err_callback(self, msg):
@@ -214,7 +223,7 @@ def run_async_in_thread(coro, stop_event):
         finally:
             loop.close()
 
-def signal_handler(signum, frame, stop_event, chassis_thread, api):
+def signal_handler(signum, frame, stop_event, shutdown_event, chassis_thread, api):
     """Custom signal handler for graceful shutdown"""
     # stop chassis
     print("\n[Ctrl-C] Received shutdown signal")
@@ -234,14 +243,14 @@ def signal_handler(signum, frame, stop_event, chassis_thread, api):
     print("[Shutdown] Shutting down ROS interface...")
     api.ros_interface.shutdown()
     print("[Shutdown] Complete")
-    sys.exit(0)
-
+    shutdown_event.set()
 
  # ========== Main Function ==========
 
 def main():
     api = HexChassisApi()
     stop_event = threading.Event()
+    shutdown_event = threading.Event()
 
     # Wait for chassis initialization
     api.ros_interface.logi("Waiting for chassis API initialization...")
@@ -285,16 +294,10 @@ def main():
     # wait thread to start
     time.sleep(0.2)
 
-    signal.signal(signal.SIGINT, lambda signum, frame: signal_handler(signum, frame, stop_event, chassis_thread, api))
-    signal.signal(signal.SIGTERM, lambda signum, frame: signal_handler(signum, frame, stop_event, chassis_thread, api))
+    signal.signal(signal.SIGINT, lambda signum, frame: signal_handler(signum, frame, stop_event, shutdown_event, chassis_thread, api))
+    signal.signal(signal.SIGTERM, lambda signum, frame: signal_handler(signum, frame, stop_event, shutdown_event, chassis_thread, api))
 
-    while api.ros_interface.ok():
-        
-        # Publish motor states and odometry
-        api._publish_motor_states()
-        api._publish_odom()
-
-        api.ros_interface.sleep()
+    shutdown_event.wait()
 
 if __name__ == '__main__':
     main()
