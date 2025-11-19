@@ -56,11 +56,6 @@ class HexArmApi:
         self.ros_interface.set_parameter('init_pose_path', '')
         init_pose_path = self.ros_interface.get_parameter('init_pose_path')
 
-        # 3. Create shared topics (ws_down, ws_up)
-        self.ws_down_pub = self.ros_interface.create_publisher('ws_down', UInt8MultiArray, 10)
-        self.ws_up_sub = self.ros_interface.create_subscription(
-            'ws_up', UInt8MultiArray, self._ws_up_callback, 10)
-
         # 4. Create Arm device
         self.arm = None
         self.joint_cmd_sub = None
@@ -70,7 +65,7 @@ class HexArmApi:
         if arm_series != 0 and Arm._supports_robot_type(arm_series):
             arm_config = ArmConfig()
             self.arm = Arm(
-                control_hz=500,
+                control_hz=250,
                 robot_type=arm_series,
                 motor_count=arm_config.arm_motor_map[arm_series],
                 send_message_callback=self._pub_ws_down
@@ -81,6 +76,10 @@ class HexArmApi:
             # arm joint config is solid for now, this code is not used
             if joint_config_path:
                 self.joint_config = self.ros_interface.get_config_from_json(joint_config_path)
+                if self.joint_config:
+                    self.arm.reload_arm_config_from_dict(self.joint_config)
+                else:
+                    self.ros_interface.logw("Joint config is None, using default config")
 
             if init_pose_path:
                 init_config = self.ros_interface.get_init_pose_config(init_pose_path)
@@ -147,6 +146,11 @@ class HexArmApi:
         else:
             self.ros_interface.logw("No gripper specified, skipping init gripper")
 
+        # 3. Create shared topics (ws_down, ws_up)
+        self.ws_down_pub = self.ros_interface.create_publisher('ws_down', UInt8MultiArray, 10)
+        self.ws_up_sub = self.ros_interface.create_subscription(
+            'ws_up', UInt8MultiArray, self._ws_up_callback, 10)
+        
         # 6. Other members
         self.first_time = True
 
@@ -162,7 +166,11 @@ class HexArmApi:
     def _ws_up_callback(self, msg):
         """ws_up callback: parse and distribute to corresponding devices"""
         api_up = public_api_up_pb2.APIUp()
-        api_up.ParseFromString(bytes(msg.data))
+        try:
+            api_up.ParseFromString(bytes(msg.data))
+        except Exception:
+            self.ros_interface.logw("Failed to parse ws_up message")
+            return
         robot_type = api_up.robot_type
         if self.arm is not None and robot_type == self.arm.robot_type:
             self.arm._update(api_up)
@@ -255,7 +263,7 @@ def run_async_in_thread(coro, stop_event):
         finally:
             loop.close()
 
-def signal_handler(signum, frame, stop_event, shutdown_event, arm_thread, hands_thread, api):
+def signal_handler(signum, frame, stop_event, shutdown_event, api, threads: list):
     """Custom signal handler for graceful shutdown"""
     # stop arm
     print("\n[Ctrl-C] Received shutdown signal")
@@ -266,17 +274,13 @@ def signal_handler(signum, frame, stop_event, shutdown_event, arm_thread, hands_
     print("[Shutdown] Stopping async threads...")
     stop_event.set()
     
-    # Wait for threads to finish with timeout
-    if arm_thread and arm_thread.is_alive():
-        arm_thread.join(timeout=2.0)
-        if arm_thread.is_alive():
-            print("[Warning] Arm thread did not stop gracefully")
-    
-    if hands_thread and hands_thread.is_alive():
-        hands_thread.join(timeout=2.0)
-        if hands_thread.is_alive():
-            print("[Warning] Hands thread did not stop gracefully")
-    
+    for thread in threads:
+        # Wait for threads to finish with timeout
+        if thread and thread.is_alive():
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                print("[Warning] Arm thread did not stop gracefully")
+
     print("[Shutdown] Shutting down ROS interface...")
     api.ros_interface.shutdown()
     print("[Shutdown] Complete")
@@ -296,6 +300,7 @@ def main():
     stop_event = threading.Event()
     shutdown_event = threading.Event()
 
+    thread_handlers = []
     # Start arm thread if arm exists
     arm_thread = None
     if api.arm is not None:
@@ -305,6 +310,7 @@ def main():
         )
         arm_thread.daemon = True
         arm_thread.start()
+        thread_handlers.append(arm_thread)
     else:
         api.ros_interface.loge("Arm not initialized, skipping arm thread.")
         return
@@ -317,14 +323,17 @@ def main():
             args=(api.hands._periodic(), stop_event)
         )
         hands_thread.daemon = True
+        thread_handlers.append(hands_thread)
         hands_thread.start()
+
+    signal.signal(signal.SIGINT, lambda signum, frame: signal_handler(signum, frame, stop_event, shutdown_event, api, thread_handlers))
+    signal.signal(signal.SIGTERM, lambda signum, frame: signal_handler(signum, frame, stop_event, shutdown_event, api, thread_handlers))
 
     # wait thread to start
     time.sleep(0.2)
 
-    signal.signal(signal.SIGINT, lambda signum, frame: signal_handler(signum, frame, stop_event, shutdown_event, arm_thread, hands_thread, api))
-    signal.signal(signal.SIGTERM, lambda signum, frame: signal_handler(signum, frame, stop_event, shutdown_event, arm_thread, hands_thread, api))
-
+    
+    # Start arm  
     api.arm.start()
     while api.arm is not None and api._is_init and not shutdown_event.is_set():
         # Initial pose control
@@ -344,7 +353,6 @@ def main():
             # Check if init pose is reached (within tolerance)
             if np.allclose(current_pos, target_pos, atol=0.05):
                 api.ros_interface.logi("Init pose reached.")
-                api.arm.stop()
                 api._is_init = False
         else:
             api.ros_interface.logi("Init pose is not set or is not a list, skipping init.")
