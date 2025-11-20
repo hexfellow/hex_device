@@ -226,9 +226,10 @@ def run_async_in_thread(coro, stop_event):
 def signal_handler(signum, frame, stop_event, shutdown_event, chassis_thread, api):
     """Custom signal handler for graceful shutdown"""
     # stop chassis
-    print("\n[Ctrl-C] Received shutdown signal")
-    api.chassis.stop()
-    time.sleep(0.5)
+    if api.chassis is not None:
+        print("\n[Ctrl-C] Received shutdown signal")
+        api.chassis.stop()
+        time.sleep(0.5)
 
     # Signal threads to stop
     print("[Shutdown] Stopping async threads...")
@@ -244,6 +245,17 @@ def signal_handler(signum, frame, stop_event, shutdown_event, chassis_thread, ap
     api.ros_interface.shutdown()
     print("[Shutdown] Complete")
     shutdown_event.set()
+
+def cmd_timeout_checker(api, shutdown_event):
+    while True:
+        if api.chassis.is_timeout():
+            api.ros_interface.logw("Command timeout detected")
+            api.chassis.stop()
+            time.sleep(0.5)
+            api.ros_interface.shutdown()
+            shutdown_event.set()
+            break
+        api.ros_interface.sleep()
 
  # ========== Main Function ==========
 
@@ -296,6 +308,13 @@ def main():
 
     signal.signal(signal.SIGINT, lambda signum, frame: signal_handler(signum, frame, stop_event, shutdown_event, chassis_thread, api))
     signal.signal(signal.SIGTERM, lambda signum, frame: signal_handler(signum, frame, stop_event, shutdown_event, chassis_thread, api))
+
+    api.ros_interface.set_rate(10)
+    threading.Thread(
+        target=cmd_timeout_checker,
+        args=(api, shutdown_event),
+        daemon=True
+    ).start()
 
     shutdown_event.wait()
 

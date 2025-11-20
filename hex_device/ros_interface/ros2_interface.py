@@ -22,7 +22,7 @@ class DataInterface(InterfaceBase):
         self.__logger = self.__node.get_logger()
 
         # Initialize rate control
-        self._rate = None
+        self._rate = self.__node.create_rate(100)
 
         # Start spin thread
         self.__spin_thread = threading.Thread(target=self.spin)
@@ -145,10 +145,7 @@ class DataInterface(InterfaceBase):
 
     def sleep(self):
         """Sleep according to rate"""
-        if self._rate is not None:
-            self._rate.sleep()
-        else:
-            self.logw("Rate is not set")
+        self._rate.sleep()
 
     # ========== Lifecycle ==========
 

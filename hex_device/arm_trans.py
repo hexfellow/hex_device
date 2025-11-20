@@ -150,9 +150,6 @@ class HexArmApi:
         self.ws_down_pub = self.ros_interface.create_publisher('ws_down', UInt8MultiArray, 10)
         self.ws_up_sub = self.ros_interface.create_subscription(
             'ws_up', UInt8MultiArray, self._ws_up_callback, 10)
-        
-        # 6. Other members
-        self.first_time = True
 
     async def _pub_ws_down(self, data):
         """Unified ws_down publishing function, shared by all devices"""
@@ -189,9 +186,6 @@ class HexArmApi:
     def _joint_cmd_callback(self, msg):
         """Process arm's joint commands"""
         if self.arm is not None and not self._is_init:
-            if self.first_time:
-                self.first_time = False
-                self.arm.start()
             self.ros_interface.process_motor_command(msg, self.arm, 'arm')
 
     def _publish_joint_states(self):
@@ -266,9 +260,10 @@ def run_async_in_thread(coro, stop_event):
 def signal_handler(signum, frame, stop_event, shutdown_event, api, threads: list):
     """Custom signal handler for graceful shutdown"""
     # stop arm
-    print("\n[Ctrl-C] Received shutdown signal")
-    api.arm.stop()
-    time.sleep(0.5)
+    if api.arm is not None:
+        print("\n[Ctrl-C] Received shutdown signal")
+        api.arm.stop()
+        time.sleep(0.5)
 
     # Signal threads to stop
     print("[Shutdown] Stopping async threads...")
