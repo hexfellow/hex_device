@@ -4,53 +4,16 @@
 This is a ROS2 package that provides ROS interface for hex robotic devices, including robotic arms and mobile chassis now.
 
 ## Prerequisites & Usage
-### 1. Automatically add the hexfellow apt source using our tool
-```bash
-chmod +x add_hexfellow_apt_source.py && sudo ./add_hexfellow_apt_source.py
-```
-### 2. Manually add the hexfellow apt source (skip this step if added automatically)
-If you don't want to use the script or if it fails, you can manually add the hexfellow apt source.  
-If there are old sources, remove them:
-```bash
-sudo rm -f /etc/apt/sources.list.d/hexfellow.sources  
-sudo rm -f /etc/apt/sources.list.d/hexfellow.list  
-sudo rm -f /etc/apt/sources.list.d/hexfellow.lists
-```
-Download the hexfellow GPG key:
-```bash
-sudo wget -q -O /usr/share/keyrings/hexfellow.gpg.key https://apt.hexfellow.com/conf/hexfellow.gpg.key
-```
-Add the following text to the /etc/apt/sources.list.d/hexfellow.sources file. If the file doesn't exist, create it:
-```
-Types: deb
-URIs: https://apt.hexfellow.com/hexfellow/
-Suites: !!!CHANGE TO YOUR UBUNTU CODENAME!!!
-Components: main
-Signed-By: /usr/share/keyrings/hexfellow.gpg.key
-```
-If you don't know your Ubuntu codename, use the lsb_release -a command to check.
-For example, if your Ubuntu version is 20.04, modify the text as follows:
-```
-Types: deb
-URIs: https://apt.hexfellow.com/hexfellow/
-Suites: focal
-Components: main
-Signed-By: /usr/share/keyrings/hexfellow.gpg.key
-```
-### 3. Install xpkg-arm-msgs
-```bash
-sudo apt update
-sudo apt install ros-$ROS_DISTRO-xpkg-arm-msgs
-```
-### 4. Download the package
+### 1. Download the package
 Create a workspace and download the package:
 ```bash
 mkdir -p ~/hex_ws/src
 cd ~/hex_ws/src
 git clone --recursive https://github.com/hexfellow/hex_bridge.git
 git clone --recursive https://github.com/hexfellow/hex_device.git
+git clone --recursive https://github.com/hexfellow/hex_device_msgs.git
 ```
-### 5. install protoc
+### 2. install protoc
 Just choose a suitable version and install it. Here below is an example of installing `protoc-27.1`.
 ```bash
 # For Linux x86_64
@@ -66,23 +29,23 @@ rm protoc-27.1-linux-aarch_64.zip
 #  Verify installation
 protoc --version  # Should show libprotoc 27.1
 ```
-### 6. Install dependencies
+### 3. Install dependencies
 ```bash
-cd ~/hex_ws/src/hex_device/hex_device/
+cd ~/hex_ws/src/hex_device/
 python3 -m pip install -r requirements.txt
 ```
-### 7. Compile Protocol Buffer files
+### 4. Compile Protocol Buffer files
 ```bash
 cd ~/hex_ws/src/hex_device/
 ./build_proto.sh
 ```
-### 8. Build
+### 5. Build
 ```bash
 cd ~/hex_ws
 colcon build
 source install/setup.bash
 ```
-### 9. Usage
+### 6. Usage
 Open a new terminal and run:
 ```bash
 ros2 launch hex_bridge hex_bridge.launch.py url:={YOUR_IP}:8439

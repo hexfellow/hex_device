@@ -7,7 +7,7 @@ import time
 script_path = os.path.abspath(os.path.dirname(__file__))
 sys.path.append(script_path)
 from ros_interface import DataInterface
-from xpkg_arm_msgs.msg import XmsgArmJointParam, XmsgArmJointParamList
+from hex_device_msgs.msg import XmsgArmJointParam, XmsgArmJointParamList
 
 class XmsgInterface:
     def __init__(self, node_name: str):
@@ -28,7 +28,7 @@ class XmsgInterface:
         self.data_interface.publish(self._joints_cmd_pub, msg)
 
 def main():
-    xmsg_interface = XmsgInterface("xmsg_pub")
+    xmsg_interface = XmsgInterface("pub_xmsg")
     control_hz = 100.0
     try:
         period_time = 1.0 / control_hz

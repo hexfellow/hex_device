@@ -39,7 +39,7 @@ setup(
             "arm_trans = hex_device.arm_trans:main",
             "chassis_trans = hex_device.chassis_trans:main",
             "chassis_key_control = hex_device.chassis_key_control:main",
-            "xmsg_pub = hex_device.pub_xmsg:main"
+            "pub_xmsg = hex_device.pub_xmsg:main"
         ],
     },
 )

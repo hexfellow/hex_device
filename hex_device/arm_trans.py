@@ -15,7 +15,7 @@ sys.path.append(script_path)
 from ros_interface import DataInterface
 from hex_device_py import Hands, Arm, public_api_up_pb2, public_api_down_pb2, public_api_types_pb2, CommandType
 from std_msgs.msg import UInt8MultiArray
-from xpkg_arm_msgs.msg import XmsgArmJointParamList
+from hex_device_msgs.msg import XmsgArmJointParamList
 from sensor_msgs.msg import JointState
 
 class ArmConfig:
