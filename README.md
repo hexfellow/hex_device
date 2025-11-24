@@ -79,11 +79,11 @@ You can remap topics as needed in the launch file.
 | `/gripper_states` | `sensor_msgs/JointState`   | Gripper states (if equipped) |
 
 #### Subscribed Topics
-| Topic          | Msg Type                              | Description                   |
-| -------------- | ------------------------------------- | ----------------------------- |
-| `/ws_up`       | `std_msgs/UInt8MultiArray`            | Protobuf messages from device |
-| `/joints_cmd`  | `xpkg_arm_msgs/XmsgArmJointParamList` | Arm joint control commands    |
-| `/gripper_cmd` | `xpkg_arm_msgs/XmsgArmJointParamList` | Gripper control commands      |
+| Topic          | Msg Type                                | Description                   |
+| -------------- | --------------------------------------- | ----------------------------- |
+| `/ws_up`       | `std_msgs/UInt8MultiArray`              | Protobuf messages from device |
+| `/joints_cmd`  | `hex_device_msgs/XmsgArmJointParamList` | Arm joint control commands    |
+| `/gripper_cmd` | `hex_device_msgs/XmsgArmJointParamList` | Gripper control commands      |
 
 #### Parameters
 | Parameter           | Type   | Default | Description                           |
@@ -94,7 +94,7 @@ You can remap topics as needed in the launch file.
 | `init_pose_path`    | string | None    | Path to initial pose configuration    |
 
 #### Message Type
-`xpkg_arm_msgs/XmsgArmJointParamList`:
+`hex_device_msgs/XmsgArmJointParamList`:
 ```
 XmsgArmJointParam[] joints
 ```
@@ -111,17 +111,17 @@ There are some example to help you understand how to use this msg.
 
 Control a joint with the control mode set to position_mode, joint angle of 0.5 radians, velocity of 1.0 radians per second, torque of 1.0 Nm, and no additional parameters:
 ```bash
-ros2 topic pub /joints_cmd xpkg_arm_msgs/XmsgArmJointParamList "joints:
+ros2 topic pub /joints_cmd hex_device_msgs/XmsgArmJointParamList "joints:
 - {mode: 'position_mode', position: 0.5, velocity: 1.0, effort: 1.0, extra_param: ''}"
 ```
 Open the brake when the joint is in position_mode:
 ```bash
-ros2 topic pub /xtopic_arm/joints_cmd xpkg_arm_msgs/XmsgArmJointParamList "joints:
+ros2 topic pub /xtopic_arm/joints_cmd hex_device_msgs/XmsgArmJointParamList "joints:
 - {mode: 'position_mode', position: 0.5, velocity: 1.0, effort: 1.0, extra_param: '{\"brake\": true}'}'"
 ```
 Control a joint with the control mode set to mit_mode, joint angle of 0.5 radians, velocity of 1.0 radians per second, torque of 1.0 Newtons, and additional parameters: kp=1.0, kd=0.5:
 ```bash
-ros2 topic pub /xtopic_arm/joints_cmd xpkg_arm_msgs/XmsgArmJointParamList "joints:
+ros2 topic pub /xtopic_arm/joints_cmd hex_device_msgs/XmsgArmJointParamList "joints:
 - {mode:'mit_mode', position: 0.5, velocity: 1.0, effort: 1.0, extra_param: '{\"mit_kp\": 1.0, \"mit_kd\": 0.5}'}'"
 ```
 For multiple joint control, just extend the list of commands.  
@@ -130,7 +130,7 @@ Check `pub_xmsg.py` file in hex_device package.
 ---
 
 ### 2. Chassis
-Provides interface for hex mobile chassis with odometry support.
+Provides interface for hex mobile chassis with odometry support.  
 You can remap topics as needed in the launch file.
 
 #### Published Topics
