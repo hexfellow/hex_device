@@ -62,6 +62,8 @@ class HexArmApi:
         self.joint_states_pub = None
         self._is_init = False
 
+        self._start_flag = False
+
         if arm_series != 0 and Arm._supports_robot_type(arm_series):
             arm_config = ArmConfig()
             self.arm = Arm(
@@ -161,6 +163,7 @@ class HexArmApi:
 
     def _ws_up_callback(self, msg):
         """ws_up callback: parse and distribute to corresponding devices"""
+        self._start_flag = True
         api_up = public_api_up_pb2.APIUp()
         try:
             api_up.ParseFromString(bytes(msg.data))
@@ -300,34 +303,39 @@ def main():
     stop_event = threading.Event()
     shutdown_event = threading.Event()
 
-    thread_handlers = []
-    # Start arm thread if arm exists
-    arm_thread = None
-    if api.arm is not None:
-        arm_thread = threading.Thread(
-            target=run_async_in_thread,
-            args=(api.arm._periodic(), stop_event)
-        )
-        arm_thread.daemon = True
-        arm_thread.start()
-        thread_handlers.append(arm_thread)
-    else:
-        api.ros_interface.loge("Arm not initialized, skipping arm thread.")
-        return
+    while True:
+        if api._start_flag:
+            thread_handlers = []
+            # Start arm thread if arm exists
+            arm_thread = None
+            if api.arm is not None:
+                arm_thread = threading.Thread(
+                    target=run_async_in_thread,
+                    args=(api.arm._periodic(), stop_event)
+                )
+                arm_thread.daemon = True
+                arm_thread.start()
+                thread_handlers.append(arm_thread)
+            else:
+                api.ros_interface.loge("Arm not initialized, skipping arm thread.")
+                return
 
-    # Start hands thread if hands exists
-    hands_thread = None
-    if api.hands is not None:
-        hands_thread = threading.Thread(
-            target=run_async_in_thread,
-            args=(api.hands._periodic(), stop_event)
-        )
-        hands_thread.daemon = True
-        thread_handlers.append(hands_thread)
-        hands_thread.start()
+            # Start hands thread if hands exists
+            hands_thread = None
+            if api.hands is not None:
+                hands_thread = threading.Thread(
+                    target=run_async_in_thread,
+                    args=(api.hands._periodic(), stop_event)
+                )
+                hands_thread.daemon = True
+                thread_handlers.append(hands_thread)
+                hands_thread.start()
 
-    signal.signal(signal.SIGINT, lambda signum, frame: signal_handler(signum, frame, stop_event, shutdown_event, api, thread_handlers))
-    signal.signal(signal.SIGTERM, lambda signum, frame: signal_handler(signum, frame, stop_event, shutdown_event, api, thread_handlers))
+            signal.signal(signal.SIGINT, lambda signum, frame: signal_handler(signum, frame, stop_event, shutdown_event, api, thread_handlers))
+            signal.signal(signal.SIGTERM, lambda signum, frame: signal_handler(signum, frame, stop_event, shutdown_event, api, thread_handlers))
+            break
+        time.sleep(0.1)
+    
 
     # wait thread to start
     time.sleep(0.2)

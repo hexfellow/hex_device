@@ -23,6 +23,12 @@ class XmsgInterface:
                 XmsgArmJointParam(mode="mit_mode", position=0.0, velocity=0.0, effort=0.0, extra_param="{\"mit_kp\": 150.0, \"mit_kd\": 12.0}"),
                 XmsgArmJointParam(mode="mit_mode", position=0.0, velocity=0.0, effort=0.0, extra_param="{\"mit_kp\": 39.0, \"mit_kd\": 0.8}"),
                 XmsgArmJointParam(mode="mit_mode", position=0.0, velocity=0.0, effort=0.0, extra_param="{\"mit_kp\": 39.0, \"mit_kd\": 0.8}"),
+                # XmsgArmJointParam(mode="position", position=-0.3, velocity=0.0, effort=0.0, extra_param=""),
+                # XmsgArmJointParam(mode="position", position=-1.48, velocity=0.0, effort=0.0, extra_param=""),
+                # XmsgArmJointParam(mode="position", position=2.86, velocity=0.0, effort=0.0, extra_param=""),
+                # XmsgArmJointParam(mode="position", position=0.0, velocity=0.0, effort=0.0, extra_param=""),
+                # XmsgArmJointParam(mode="position", position=0.0, velocity=0.0, effort=0.0, extra_param=""),
+                # XmsgArmJointParam(mode="position", position=0.0, velocity=0.0, effort=0.0, extra_param=""),
             ]
         )
         self.data_interface.publish(self._joints_cmd_pub, msg)
