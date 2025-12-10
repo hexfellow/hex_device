@@ -13,7 +13,7 @@ script_path = os.path.abspath(os.path.dirname(__file__))
 sys.path.append(script_path)
 
 from ros_interface import DataInterface
-from hex_device_py import Hands, Arm, public_api_up_pb2, public_api_down_pb2, public_api_types_pb2, CommandType
+from hex_device_py import Hands, Arm, public_api_up_pb2, public_api_down_pb2, public_api_types_pb2, CommandType, Timestamp
 from std_msgs.msg import UInt8MultiArray
 from hex_device_msgs.msg import XmsgArmJointParamList
 from sensor_msgs.msg import JointState
@@ -22,10 +22,10 @@ class ArmConfig:
     """Arm configuration: mapping arm type to motor count"""
     def __init__(self):
         self.arm_motor_map = {
-            public_api_types_pb2.RobotType.RtArmArcherD6Y: 6,
-            public_api_types_pb2.RobotType.RtArmSaberD6X: 6,
-            public_api_types_pb2.RobotType.RtArmSaberD7X: 7,
-            public_api_types_pb2.RobotType.RtArmArcherL6Y: 6,
+            public_api_types_pb2.RobotType.RtArmSaberD6x: 6,
+            public_api_types_pb2.RobotType.RtArmSaberD7x: 7,
+            public_api_types_pb2.RobotType.RtArmArcherY6D_V1: 6,
+            public_api_types_pb2.RobotType.RtArmArcherY6L_V1: 6,
         }
 
 
@@ -33,8 +33,8 @@ class GripperConfig:
     """Gripper configuration: mapping gripper type to motor count"""
     def __init__(self):
         self.gripper_motor_map = {
-            public_api_types_pb2.HandType.HtInvalid: 0,
-            public_api_types_pb2.HandType.HtGp100: 1,
+            public_api_types_pb2.SecondaryDeviceType.SdtUnknown: 0,
+            public_api_types_pb2.SecondaryDeviceType.SdtHandGp100: 1,
         }
 
 class HexArmApi:
@@ -73,7 +73,6 @@ class HexArmApi:
             self.arm._set_robot_type(arm_series)
 
             # Load configuration using device methods
-            # arm joint config is solid for now, this code is not used
             if joint_config_path:
                 self.joint_config = self.ros_interface.get_config_from_json(joint_config_path)
                 if self.joint_config:
@@ -170,7 +169,7 @@ class HexArmApi:
             return
         robot_type = api_up.robot_type
         if self.arm is not None and robot_type == self.arm.robot_type:
-            self.arm._update(api_up)
+            self.arm._update(api_up, Timestamp.from_ns(time.perf_counter_ns()))
             self._publish_joint_states()
         if self.hands is not None:
             if hasattr(api_up, 'secondary_device_status') and api_up.secondary_device_status:
@@ -178,7 +177,7 @@ class HexArmApi:
                     device_id = secondary_device.device_id
                     device_type = secondary_device.device_type
                     if device_type and device_id == self.hands.device_id:
-                        self.hands._update_optional_data(device_type, secondary_device)
+                        self.hands._update_optional_data(device_type, secondary_device, Timestamp.from_ns(time.perf_counter_ns()))
                         self._publish_gripper_states()
         
     # ========== Arm-specific topic callbacks ==========
@@ -190,13 +189,16 @@ class HexArmApi:
 
     def _publish_joint_states(self):
         """Publish arm's joint states"""
-        if self.arm is not None and self.arm._has_new_data:
-            motor_status = self.arm.get_simple_motor_status()
+        if self.arm is not None and self.arm.has_new_data():
+            motor_status = self.arm.get_simple_motor_status(pop=False)
+            if motor_status is None:
+                return
             msg = JointState()
+            msg.header.stamp = self.ros_interface.get_timestamp_from_s_ns(motor_status['ts']['s'], motor_status['ts']['ns'])
             msg.name = [f"joint{i}" for i in range(len(motor_status['pos']))]
-            msg.position = motor_status['pos']
-            msg.velocity = motor_status['vel']
-            msg.effort = motor_status['eff']
+            msg.position = motor_status['pos'].tolist()
+            msg.velocity = motor_status['vel'].tolist()
+            msg.effort = motor_status['eff'].tolist()
             self.ros_interface.publish(self.joint_states_pub, msg)
 
     # ========== Hands-specific topic callbacks ==========
@@ -208,13 +210,16 @@ class HexArmApi:
 
     def _publish_gripper_states(self):
         """Publish gripper states"""
-        if self.hands is not None and self.hands._has_new_data:
-            motor_status = self.hands.get_simple_motor_status()
+        if self.hands is not None and self.hands.has_new_data():
+            motor_status = self.hands.get_simple_motor_status(pop=False)
+            if motor_status is None:
+                return
             msg = JointState()
+            msg.header.stamp = self.ros_interface.get_timestamp_from_s_ns(motor_status['ts']['s'], motor_status['ts']['ns'])
             msg.name = [f"gripper{i}" for i in range(len(motor_status['pos']))]
-            msg.position = motor_status['pos']
-            msg.velocity = motor_status['vel']
-            msg.effort = motor_status['eff']
+            msg.position = motor_status['pos'].tolist()
+            msg.velocity = motor_status['vel'].tolist()
+            msg.effort = motor_status['eff'].tolist()
             self.ros_interface.publish(self.gripper_states_pub, msg)
 
 async def _run_with_cancellation(coro, stop_event, loop):
@@ -334,7 +339,10 @@ def main():
         # Initial pose control
         if api.init_pose is not None and isinstance(api.init_pose, list):
             # Get current position
-            current_pos = np.array(api.arm.get_motor_positions())
+            current_pos = api.arm.get_motor_positions()
+            if current_pos is None:
+                continue
+            current_pos = np.array(current_pos)
             target_pos = np.array(api.init_pose)
             err = target_pos - current_pos
 

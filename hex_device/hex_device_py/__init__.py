@@ -19,7 +19,8 @@ from .motor_base import (
     MotorError, 
     MotorCommand, 
     CommandType, 
-    MitMotorCommand
+    MitMotorCommand,
+    Timestamp
 )
 
 # Protobuf messages
@@ -60,6 +61,7 @@ __all__ = [
     'MotorCommand',
     'CommandType',
     'MitMotorCommand',
+    'Timestamp',
 
     # Protobuf messages
     'public_api_up_pb2',

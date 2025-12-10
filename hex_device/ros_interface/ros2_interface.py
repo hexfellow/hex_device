@@ -4,6 +4,7 @@
 import threading
 import rclpy
 import rclpy.node
+from rclpy.time import Time
 from ament_index_python.packages import get_package_share_directory
 from .interface_base import InterfaceBase
 
@@ -202,6 +203,9 @@ class DataInterface(InterfaceBase):
    
     def get_timestamp(self):
         return self.__node.get_clock().now().to_msg()
+    
+    def get_timestamp_from_s_ns(self, s: int, ns: int):
+        return Time(seconds=s, nanoseconds=ns).to_msg()
 
     # ========== Internal methods ==========
 

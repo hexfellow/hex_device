@@ -14,7 +14,7 @@ script_path = os.path.abspath(os.path.dirname(__file__))
 sys.path.append(script_path)
 
 from ros_interface import DataInterface
-from hex_device_py import Chassis, CommandType, public_api_up_pb2, public_api_down_pb2, public_api_types_pb2
+from hex_device_py import Chassis, CommandType, public_api_up_pb2, public_api_down_pb2, public_api_types_pb2, Timestamp
 from geometry_msgs.msg import TwistStamped, Twist
 from sensor_msgs.msg import JointState
 from nav_msgs.msg import Odometry
@@ -82,7 +82,7 @@ class HexChassisApi:
                     send_message_callback=self._pub_ws_down
                 )
                 self.chassis._set_robot_type(robot_type)
-                self.chassis._update(api_up)
+                self.chassis._update(api_up, Timestamp.from_ns(time.perf_counter_ns()))
                 self.chassis.clear_odom_bias()
 
                 if self.simple_mode == True:
@@ -130,7 +130,7 @@ class HexChassisApi:
 
         if self.chassis is not None and self.init_state == InitState.SUCCESS:
           if api_up.robot_type == self.chassis.robot_type:
-              self.chassis._update(api_up)
+              self.chassis._update(api_up, Timestamp.from_ns(time.perf_counter_ns()))
               self._publish_odom()
               self._publish_motor_states()
 
@@ -153,13 +153,19 @@ class HexChassisApi:
             self.chassis.clear_parking_stop()
 
     def _publish_odom(self):
-        if self.chassis is not None and self.chassis._has_new_data:
+        if self.chassis is not None and self.chassis.has_new_data():
             msg = Odometry()
             msg.header.stamp = self.ros_interface.get_timestamp()
             msg.header.frame_id = "odom"
             msg.child_frame_id = self.frame_id
-            speed_x, speed_y, speed_z = self.chassis.get_vehicle_speed()
-            x, y, yaw = self.chassis.get_vehicle_position()
+            speeds= self.chassis.get_vehicle_speed()
+            if speeds is None:
+                return
+            speed_x, speed_y, speed_z = speeds
+            position = self.chassis.get_vehicle_position()
+            if position is None:
+                return
+            x, y, yaw = position
             msg.pose.pose.position.x = x
             msg.pose.pose.position.y = y
             msg.pose.pose.position.z = 0.0
@@ -175,13 +181,16 @@ class HexChassisApi:
             self.ros_interface.publish(self.odom_pub, msg)
 
     def _publish_motor_states(self):
-        if self.chassis is not None and self.chassis._has_new_data:
+        if self.chassis is not None and self.chassis.has_new_data():
             motor_status = self.chassis.get_simple_motor_status()
+            if motor_status is None:
+                return
             msg = JointState()
+            msg.header.stamp = self.ros_interface.get_timestamp_from_s_ns(motor_status['ts']['s'], motor_status['ts']['ns'])
             msg.name = [f"joint{i}" for i in range(len(motor_status['pos']))]
-            msg.position = motor_status['pos']
-            msg.velocity = motor_status['vel']
-            msg.effort = motor_status['eff']
+            msg.position = motor_status['pos'].tolist()
+            msg.velocity = motor_status['vel'].tolist()
+            msg.effort = motor_status['eff'].tolist()
             self.ros_interface.publish(self.motor_states_pub, msg)
 
 async def _run_with_cancellation(coro, stop_event, loop):

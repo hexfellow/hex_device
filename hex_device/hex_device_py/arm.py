@@ -6,17 +6,15 @@
 # Date  : 2025-8-1
 ################################################################
 
-import threading
+import copy
 import time
 import numpy as np
 from typing import Optional, Tuple, List, Dict, Any, Union
 from .common_utils import delay, log_common, log_info, log_warn, log_err
 from .device_base import DeviceBase
-from .motor_base import MitMotorCommand, MotorBase, MotorError, MotorCommand, CommandType
+from .motor_base import MitMotorCommand, MotorBase, MotorError, MotorCommand, CommandType, Timestamp
 from .generated import public_api_down_pb2, public_api_up_pb2, public_api_types_pb2
-from .generated.public_api_types_pb2 import (ArmStatus)
 from .arm_config import get_arm_config, ArmConfig, arm_config_manager
-import copy
 
 
 class Arm(DeviceBase, MotorBase):
@@ -28,17 +26,17 @@ class Arm(DeviceBase, MotorBase):
     """
 
     SUPPORTED_ROBOT_TYPES = [
-        public_api_types_pb2.RobotType.RtArmArcherD6Y,
-        public_api_types_pb2.RobotType.RtArmSaberD6X,
-        public_api_types_pb2.RobotType.RtArmSaberD7X,
-        public_api_types_pb2.RobotType.RtArmArcherL6Y,
+        public_api_types_pb2.RobotType.RtArmSaberD6x,
+        public_api_types_pb2.RobotType.RtArmSaberD7x,
+        public_api_types_pb2.RobotType.RtArmArcherY6D_V1,
+        public_api_types_pb2.RobotType.RtArmArcherY6L_V1,
     ]
 
     ARM_SERIES_TO_ROBOT_TYPE = {
-        14: public_api_types_pb2.RobotType.RtArmSaberD6X,
-        15: public_api_types_pb2.RobotType.RtArmSaberD7X,
-        16: public_api_types_pb2.RobotType.RtArmArcherD6Y,
-        17: public_api_types_pb2.RobotType.RtArmArcherL6Y,
+        14: public_api_types_pb2.RobotType.RtArmSaberD6x,
+        15: public_api_types_pb2.RobotType.RtArmSaberD7x,
+        16: public_api_types_pb2.RobotType.RtArmArcherY6D_V1,
+        17: public_api_types_pb2.RobotType.RtArmArcherY6L_V1,
     }
 
     def __init__(self,
@@ -63,7 +61,11 @@ class Arm(DeviceBase, MotorBase):
         self.name = name or "Arm"
         self._control_hz = control_hz
         self._period = 1.0 / control_hz
-        self._arm_series = robot_type
+        self._set_robot_type(robot_type)
+
+        self._enable_mit = False
+        if robot_type == 16 or robot_type == 17:
+            self._enable_mit = True
 
         # arm status
         self._api_control_initialized = False
@@ -120,7 +122,7 @@ class Arm(DeviceBase, MotorBase):
             log_err(f"Arm initialization failed: {e}")
             return False
 
-    def _update(self, api_up_data) -> bool:
+    def _update(self, api_up_data, timestamp: Timestamp) -> bool:
         """
         Update robotic arm data
         
@@ -131,12 +133,12 @@ class Arm(DeviceBase, MotorBase):
             bool: Whether update was successful
         """
         try:
-            if api_up_data.HasField('log'):
-                log_warn(f"Arm: Get log from server: {api_up_data.log}")
-
             if not api_up_data.HasField('arm_status'):
                 return False
             arm_status = api_up_data.arm_status
+
+            # Update motor data
+            self._push_motor_data(arm_status.motor_status, timestamp)
 
             with self._status_lock:
                 # update my session id
@@ -148,7 +150,7 @@ class Arm(DeviceBase, MotorBase):
 
                 if self._session_holder != self._previous_session_holder:
                     if self._session_holder == self._my_session_id:
-                        log_warn(f"Arm: You can control the arm now! Your session ID: {self._session_holder}")
+                        log_info(f"Arm: You can control the arm now! Your session ID: {self._session_holder}")
                     else:
                         log_warn(f"Arm: Can not control the arm, now holder is ID: {self._session_holder}, waiting...")
                 self._previous_session_holder = self._session_holder
@@ -157,68 +159,11 @@ class Arm(DeviceBase, MotorBase):
                     self._parking_stop_detail = arm_status.parking_stop_detail
                 else:
                     self._parking_stop_detail = public_api_types_pb2.ParkingStopDetail()
-
-            # Update motor data
-            self._update_motor_data_from_arm_status(arm_status)
-            self.set_has_new_data()
             return True
+
         except Exception as e:
-            log_err(f"Arm data update failed: {e}")
+            log_err(f"Arm _update failed: {e}")
             return False
-
-    def _update_motor_data_from_arm_status(self, arm_status: ArmStatus):
-        motor_status_list = arm_status.motor_status
-
-        if len(motor_status_list) != self.motor_count:
-            log_warn(
-                f"Warning: Motor count mismatch, expected {self.motor_count}, actual {len(motor_status_list)}")
-            return
-
-        # Parse motor data
-        positions = []  # encoder position
-        velocities = []  # rad/s
-        torques = []  # Nm
-        driver_temperature = []
-        motor_temperature = []
-        pulse_per_rotation = []
-        wheel_radius = []
-        voltage = []
-        error_codes = []
-        current_targets = []
-
-        for motor_status in motor_status_list:
-            positions.append(motor_status.position)
-            velocities.append(motor_status.speed)
-            torques.append(motor_status.torque)
-            pulse_per_rotation.append(motor_status.pulse_per_rotation)
-            wheel_radius.append(motor_status.wheel_radius)
-            current_targets.append(motor_status.current_target)
-
-            driver_temp = motor_status.driver_temperature if motor_status.HasField(
-                'driver_temperature') else 0.0
-            motor_temp = motor_status.motor_temperature if motor_status.HasField(
-                'motor_temperature') else 0.0
-            volt = motor_status.voltage if motor_status.HasField(
-                'voltage') else 0.0
-            driver_temperature.append(driver_temp)
-            motor_temperature.append(motor_temp)
-            voltage.append(volt)
-
-            error_code = None
-            if motor_status.error:
-                error_code = motor_status.error[0]
-            error_codes.append(error_code)
-
-        self.update_motor_data(positions=positions,
-                               velocities=velocities,
-                               torques=torques,
-                               driver_temperature=driver_temperature,
-                               motor_temperature=motor_temperature,
-                               voltage=voltage,
-                               pulse_per_rotation=pulse_per_rotation,
-                               wheel_radius=wheel_radius,
-                               error_codes=error_codes,
-                               current_targets=current_targets)
 
     async def _periodic(self):
         """
@@ -272,6 +217,7 @@ class Arm(DeviceBase, MotorBase):
                     sh = self._session_holder
                     mi = self._my_session_id
                     sp = self._send_clear_parking_stop
+                    self._send_clear_parking_stop = None
 
                 # print(f"api_control_initialized: {a}, calibrated: {c}, session holder: {sh}, my session id: {mi}")
                 
@@ -281,22 +227,21 @@ class Arm(DeviceBase, MotorBase):
                 elif s:
                     msg = self._construct_init_message()
                     await self._send_message(msg)
-                    self._send_init = None
+                    self._clear_send_init()
                 elif not s:
                     msg = self._construct_init_message(False)
                     await self._send_message(msg)
-                    self._send_init = None
+                    self._clear_send_init()
 
                 ## send clear parking stop message
                 if sp == True:
                     msg = self._construct_clear_parking_stop_message()
                     await self._send_message(msg)
-                    sp = None
 
                 ## check if is holder:
                 if sh != mi:
                     if start_time - self.__last_warning_time > 3.0:
-                        log_warn(f"Arm: Waiting to get the control of the arm...")
+                        log_info(f"Arm: Waiting to get the control of the arm...")
                         self.__last_warning_time = start_time
                     continue
                 
@@ -368,6 +313,10 @@ class Arm(DeviceBase, MotorBase):
         # Convert numpy array to list if needed
         if isinstance(values, np.ndarray):
             values = values.tolist()
+
+        if (command_type == CommandType.MIT or command_type == CommandType.TORQUE) and not self._enable_mit:
+            raise ValueError("Due to specific configurations, certain robotic arms may require consultation before they can be safely operated. \
+            The MIT command is not enabled by default on this arm. Please contact customer service to inquire about activating MIT support.")
         
         super().motor_command(command_type, values)
         self._last_command_time = time.perf_counter()
@@ -381,6 +330,10 @@ class Arm(DeviceBase, MotorBase):
             self) -> public_api_types_pb2.ParkingStopDetail:
         """Get parking stop details"""
         return copy.deepcopy(self._parking_stop_detail)
+
+    def _enable_mit(self):
+        """Enable MIT"""
+        self._enable_mit = True
 
     # msg constructor
     def _construct_init_message(self, api_control_initialize: bool = True) -> public_api_down_pb2.APIDown:
@@ -456,12 +409,16 @@ class Arm(DeviceBase, MotorBase):
         arm_exclusive_command = public_api_types_pb2.ArmExclusiveCommand()
         arm_api_control_command = public_api_types_pb2.ArmApiControlCommand()
 
-        motor_targets = self._construct_target_motor_msg(self._pulse_per_rotation, self._period)
-        arm_api_control_command.motor_targets.CopyFrom(motor_targets)
-        arm_exclusive_command.arm_api_control_command.CopyFrom(arm_api_control_command)
-        arm_command.arm_exclusive_command.CopyFrom(arm_exclusive_command)
-        msg.arm_command.CopyFrom(arm_command)
-        return msg
+        pulse_per_rotation_arr = self.get_motor_pulse_per_rotations()
+        if pulse_per_rotation_arr is not None:
+            motor_targets = self._construct_target_motor_msg(pulse_per_rotation_arr, self._period)
+            arm_api_control_command.motor_targets.CopyFrom(motor_targets)
+            arm_exclusive_command.arm_api_control_command.CopyFrom(arm_api_control_command)
+            arm_command.arm_exclusive_command.CopyFrom(arm_exclusive_command)
+            msg.arm_command.CopyFrom(arm_command)
+            return msg
+        else:
+            raise ValueError(f"Cannot construct joint command message: pulse_per_rotation data not available (not set yet)")
 
     def _construct_custom_joint_command_msg(self, motor_msg: public_api_types_pb2.MotorTargets) -> public_api_down_pb2.APIDown:
         """
@@ -491,11 +448,11 @@ class Arm(DeviceBase, MotorBase):
             
     def get_arm_config(self) -> Optional[ArmConfig]:
         """Get current robotic arm configuration"""
-        return copy.deepcopy(get_arm_config(self._arm_series))
+        return copy.deepcopy(get_arm_config(self.robot_type))
 
     def get_joint_limits(self) -> Optional[List[List[float]]]:
         """Get joint limits"""
-        return copy.deepcopy(arm_config_manager.get_joint_limits(self._arm_series))
+        return copy.deepcopy(arm_config_manager.get_joint_limits(self.robot_type))
 
     def validate_joint_positions(self,
                                  positions: List[float],
@@ -510,18 +467,17 @@ class Arm(DeviceBase, MotorBase):
         Returns:
             List[float]: Corrected position list
         """
-        last_positions = arm_config_manager.get_last_positions(self._arm_series)
+        last_positions = arm_config_manager.get_last_positions(self.robot_type)
         
         if last_positions is None:
-            current_positions = self.get_motor_positions()
+            current_positions = self.cache_positions.tolist()
             if len(current_positions) == len(positions):
-                arm_config_manager.set_last_positions(self._arm_series, current_positions)
-                log_common(f"Arm: Initialize current motor positions: {current_positions}")
+                arm_config_manager.set_last_positions(self.robot_type, current_positions)
             else:
                 log_warn(f"Arm: Current motor positions count({len(current_positions)}) does not match the target positions count({len(positions)})")
         
         return arm_config_manager.validate_joint_positions(
-            self._arm_series, positions, dt)
+            self.robot_type, positions, dt)
 
     def validate_joint_velocities(self,
                                   velocities: List[float],
@@ -530,15 +486,15 @@ class Arm(DeviceBase, MotorBase):
         Validate whether joint velocities are within limit range and return corrected velocity list
         """
         return arm_config_manager.validate_joint_velocities(
-            self._arm_series, velocities, dt)
+            self.robot_type, velocities, dt)
 
     def get_joint_names(self) -> Optional[List[str]]:
         """Get joint names"""
-        return copy.deepcopy(arm_config_manager.get_joint_names(self._arm_series))
+        return copy.deepcopy(arm_config_manager.get_joint_names(self.robot_type))
 
     def get_expected_motor_count(self) -> Optional[int]:
         """Get expected motor count"""
-        return copy.deepcopy(arm_config_manager.get_motor_count(self._arm_series))
+        return copy.deepcopy(arm_config_manager.get_motor_count(self.robot_type))
 
     def check_motor_count_match(self) -> bool:
         """Check if motor count matches configuration"""
@@ -549,7 +505,7 @@ class Arm(DeviceBase, MotorBase):
 
     def get_arm_series(self) -> int:
         """Get robotic arm series"""
-        return copy.deepcopy(self._arm_series)
+        return copy.deepcopy(self.robot_type)
 
     def get_arm_name(self) -> Optional[str]:
         """Get robotic arm name"""
@@ -568,7 +524,7 @@ class Arm(DeviceBase, MotorBase):
         """
         try:
             success = arm_config_manager.reload_from_dict(
-                self._arm_series, config_data)
+                self.robot_type, config_data)
             if success:
                 log_common(f"Arm: reload arm config success: {config_data.get('name', 'unknown')}")
             else:
@@ -585,7 +541,7 @@ class Arm(DeviceBase, MotorBase):
         Args:
             positions: Initial position list (rad)
         """
-        arm_config_manager.set_initial_positions(self._arm_series, positions)
+        arm_config_manager.set_initial_positions(self.robot_type, positions)
 
     def set_initial_velocities(self, velocities: List[float]):
         """
@@ -594,7 +550,7 @@ class Arm(DeviceBase, MotorBase):
         Args:
             velocities: Initial velocity list (rad/s)
         """
-        arm_config_manager.set_initial_velocities(self._arm_series, velocities)
+        arm_config_manager.set_initial_velocities(self.robot_type, velocities)
 
     def get_last_positions(self) -> Optional[List[float]]:
         """
@@ -603,7 +559,7 @@ class Arm(DeviceBase, MotorBase):
         Returns:
             List[float]: Last position list, returns None if no record exists
         """
-        return arm_config_manager.get_last_positions(self._arm_series)
+        return arm_config_manager.get_last_positions(self.robot_type)
 
     def get_last_velocities(self) -> Optional[List[float]]:
         """
@@ -612,16 +568,16 @@ class Arm(DeviceBase, MotorBase):
         Returns:
             List[float]: Last velocity list, returns None if no record exists
         """
-        return arm_config_manager.get_last_velocities(self._arm_series)
+        return arm_config_manager.get_last_velocities(self.robot_type)
 
     def clear_position_history(self):
         """Clear position history records"""
-        arm_config_manager.clear_position_history(self._arm_series)
+        arm_config_manager.clear_position_history(self.robot_type)
 
     def clear_velocity_history(self):
         """Clear velocity history records"""
-        arm_config_manager.clear_velocity_history(self._arm_series)
+        arm_config_manager.clear_velocity_history(self.robot_type)
 
     def clear_motion_history(self):
         """Clear all motion history records (position and velocity)"""
-        arm_config_manager.clear_motion_history(self._arm_series)
+        arm_config_manager.clear_motion_history(self.robot_type)

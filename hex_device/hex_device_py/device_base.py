@@ -9,7 +9,7 @@
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any
 import threading
-import time
+from collections import deque
 
 
 class DeviceBase(ABC):
@@ -28,12 +28,8 @@ class DeviceBase(ABC):
 
         self._send_message_callback = send_message_callback
 
-        self._last_update_time = None
-
-        self._data_lock = threading.Lock()
-        self._status_lock = threading.Lock()
-
-        self._has_new_data = False
+        self._data_lock = threading.Lock()  # Use for motor data read and write
+        self._status_lock = threading.Lock() # Use for status read and write
 
         # Api_control_initialized
         self._send_init: Optional[bool] = None
@@ -77,26 +73,17 @@ class DeviceBase(ABC):
         with self._status_lock:
             self._send_init = False
 
-    def set_has_new_data(self):
-        with self._data_lock:
-            self._has_new_data = True
-
-    def has_new_data(self) -> bool:
-        """Check if there is new data"""
-        with self._data_lock:
-            return self._has_new_data
-
-    def clear_new_data_flag(self):
-        """Clear new data flag"""
-        with self._data_lock:
-            self._has_new_data = False
+    def _clear_send_init(self):
+        """
+        Clear send init
+        """
+        with self._status_lock:
+            self._send_init = None
 
     def get_device_summary(self) -> Dict[str, Any]:
         """Get device status summary"""
         return {
             'name': self.name,
-            'has_new_data': self.has_new_data(),
-            'last_update_time': self._last_update_time,
         }
 
     # Abstract methods - subclasses must implement
@@ -111,7 +98,7 @@ class DeviceBase(ABC):
         pass
 
     @abstractmethod
-    def _update(self, api_up_data) -> bool:
+    def _update(self, api_up_data, timestamp) -> bool:
         """
         Update device data
         
@@ -166,16 +153,10 @@ class DeviceBase(ABC):
         """
         pass
 
-    def _update_timestamp(self):
-        """Update timestamp"""
-        with self._data_lock:
-            self._last_update_time = time.time_ns()
-            self._has_new_data = True
-
     def __str__(self) -> str:
         """String representation"""
-        return f"{self.name}, {self.has_new_data}, {self._last_update_time}"
+        return f"{self.name}"
 
     def __repr__(self) -> str:
         """Detailed string representation"""
-        return f"DeviceBase(name='{self.name}', has_new_data={self.has_new_data}, last_update_time={self._last_update_time})"
+        return f"DeviceBase(name='{self.name}')"
